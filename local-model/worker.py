@@ -51,11 +51,11 @@ class Translator:
             self.device = 'cpu'
             self.load()
 
-    def complete(self, prompt):
+    def complete(self, prompt, max_tokens=512):
         try:
             return self.engine.create_chat_completion(
                 messages=[{'role': 'user', 'content': prompt}], temperature=0, top_p=0.6, top_k=20,
-                repeat_penalty=1.05, max_tokens=512,
+                repeat_penalty=1.05, max_tokens=max_tokens,
             )
         except (RuntimeError, ValueError, OSError):
             if self.device != 'auto' or not self.using_cuda:
@@ -85,13 +85,17 @@ class Translator:
             return texts
         missing = list(dict.fromkeys(text for text in texts if text.strip() and (source, target, comic, text) not in self.cache))
         for text in missing:
-            if len(self.engine.tokenize(text.encode('utf-8'))) > 512:
+            input_tokens = len(self.engine.tokenize(text.encode('utf-8')))
+            if input_tokens > 512:
                 raise ValueError('A text region exceeds 512 model tokens; select a smaller text region.')
             kind = 'manga text' if comic else 'text'
             prompt = (f'Translate the following {LANGUAGES[source]} {kind} into natural {LANGUAGES[target]}. '
                       f'Preserve meaning, tone, names and numbers. Transliterate {LANGUAGES[source]} proper names '
                       f'into {LANGUAGES[target]}. Only output the translation:\n{text}')
-            response = self.complete(prompt)
+            # Short dialogue should not reserve a 512-token decode budget. Keep enough
+            # room for Thai expansion while bounding runaway output on live frames.
+            max_tokens = min(512, max(128, input_tokens * 3 + 32))
+            response = self.complete(prompt, max_tokens)
             choice = response['choices'][0]
             if choice.get('finish_reason') != 'stop':
                 raise ValueError('Translation reached its output limit; select a smaller text region.')
