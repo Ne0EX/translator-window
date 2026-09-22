@@ -414,4 +414,5 @@ FodyWeavers.xsd
 .cache/
 models/
 artifacts/
+.agents/
 __pycache__/
