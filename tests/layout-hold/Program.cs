@@ -74,10 +74,10 @@ internal static class Program
             fallbackCancellation.Token, hideOriginals: true);
         try
         {
-            await Until(() => fallbackStatuses.Any(s => s.Contains("beside-text")), fallbackRun);
+            await Until(() => fallbackStatuses.Any(s => s.Contains("translated blocks")), fallbackRun);
             Require(((Canvas)fallbackOverlay.Content).Children.OfType<Border>().Any(b => b.Child is TextBlock t && t.Text == "Colored caption"),
-                "A textured overwrite failure must keep the translated caption visible beside the source.");
-            Console.WriteLine("PASS: textured overwrite falls back to beside-text captions.");
+                "A textured overwrite page must keep the translated caption visible while covering the source.");
+            Console.WriteLine("PASS: textured overwrite keeps captions opaque.");
         }
         finally
         {

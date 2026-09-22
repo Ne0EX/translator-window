@@ -80,16 +80,7 @@ public sealed class LiveTranslationSession
                             catch (SubtitleLayoutException error) when (error.BackgroundRejected
                                 && style == SubtitleStyle.Overwrite && hideOriginals)
                             {
-                                try
-                                {
-                                    _overlay.Render(result.Bounds, result.Regions, result.Translations,
-                                        SubtitleStyle.Overlay, padding);
-                                    _status("Overwrite could not safely cover this artwork; showing beside-text subtitles while watching for changes.");
-                                }
-                                catch (SubtitleLayoutException)
-                                {
-                                    _status(error.Message + " The previous view stays covered while watching for changes.");
-                                }
+                                _status(error.Message + " The previous view stays covered while watching for changes.");
                             }
                             catch (SubtitleLayoutException error)
                             {

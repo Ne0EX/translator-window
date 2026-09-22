@@ -144,6 +144,16 @@ public sealed class SubtitleOverlay : Window
                                 captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels);
                                 return captionBackground is not null;
                             });
+                    if (position is null && style == SubtitleStyle.Overwrite)
+                    {
+                        // Overwrite masks already cover the source; let a crowded page reuse nearby space.
+                        position = SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
+                            Array.Empty<Drawing.Rectangle>(), false, padding, backgroundPixels is null ? null
+                                : candidate => {
+                                    captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels);
+                                    return captionBackground is not null;
+                                });
+                    }
                     if (position is null) continue;
 
                     text.Foreground = ForegroundBrush(captionBackground!);
@@ -257,8 +267,8 @@ public sealed class SubtitleOverlay : Window
             }
         if (samples == 0) return Brushes.White;
         if (minR >= 240 && minG >= 240 && minB >= 240) return Brushes.White;
-        // ponytail: accept solid color bubbles; textured artwork still needs inpainting.
-        if (maxR - minR > 32 || maxG - minG > 32 || maxB - minB > 32) return null;
+        // ponytail: overwrite must hide the source even over textured artwork; white is the safe fallback.
+        if (maxR - minR > 32 || maxG - minG > 32 || maxB - minB > 32) return Brushes.White;
         var brush = new SolidColorBrush(Color.FromRgb((byte)(totalR / samples), (byte)(totalG / samples), (byte)(totalB / samples)));
         brush.Freeze();
         return brush;

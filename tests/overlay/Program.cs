@@ -85,7 +85,7 @@ internal static class Program
         if (!args.Contains("--visual")) return;
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         CheckColoredOverwrite();
-        CheckTexturedOverwriteRejects();
+        CheckTexturedOverwrite();
         var screen = Forms.Screen.PrimaryScreen!.Bounds;
         var capture = new Drawing.Rectangle(screen.Left + 80, screen.Top + 60, 720, Math.Min(800, screen.Height - 100));
         var regions = new[] {
@@ -250,7 +250,7 @@ internal static class Program
         Console.WriteLine("Colored manga overwrite rendering passed.");
     }
 
-    private static void CheckTexturedOverwriteRejects()
+    private static void CheckTexturedOverwrite()
     {
         const int width = 600, height = 300;
         var pixels = new byte[width * height * 4];
@@ -270,20 +270,17 @@ internal static class Program
         var overlay = new SubtitleOverlay();
         try
         {
-            try
-            {
-                overlay.Render(new Drawing.Rectangle(0, 0, width, height),
-                    new[] { new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)) },
-                    new[] { "นี่คือคำแปล" }, SubtitleStyle.Overwrite, 6, frame);
-                throw new InvalidOperationException("Textured artwork should not be covered by an opaque overwrite caption.");
-            }
-            catch (SubtitleLayoutException error)
-            {
-                Require(error.BackgroundRejected, "Textured overwrite failures must identify the background constraint.");
-            }
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                new[] {
+                    new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)),
+                    new TextRegion("本文", new Drawing.Rectangle(340, 90, 40, 120))
+                },
+                new[] { "นี่คือคำแปล", "ข้อความ" }, SubtitleStyle.Overwrite, 6, frame);
+            Require(((Canvas)overlay.Content).Children.OfType<Border>().Count(b => b.Child is TextBlock) == 2,
+                "Overwrite must render over textured artwork instead of exposing the source text.");
         }
         finally { overlay.Close(); }
-        Console.WriteLine("Textured manga overwrite remains protected.");
+        Console.WriteLine("Textured manga overwrite rendering passed.");
     }
 
     private static void Pump(Application app)
@@ -339,4 +336,3 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool SetWindowDisplayAffinity(nint hwnd, uint affinity);
     [DllImport("user32.dll")] private static extern bool GetWindowDisplayAffinity(nint hwnd, out uint affinity);
 }
-
