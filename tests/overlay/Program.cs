@@ -17,6 +17,11 @@ internal static class Program
 {
     private static void CheckThaiWrapping()
     {
+        var compactFonts = SubtitleOverlay.CaptionFontSizes(12, 1).ToArray();
+        Require(compactFonts.Max() == 10 && compactFonts.Min() == 8,
+            "A short textbox must search down to readable compact sizes instead of forcing a large generic caption.");
+        Require(SubtitleOverlay.CaptionFontSizes(100, 1).Max() == 24,
+            "A large textbox may use a larger font, within the caption size limit.");
         var text = new TextBlock { FontFamily = new FontFamily("Leelawadee UI"), FontSize = 20,
             Language = System.Windows.Markup.XmlLanguage.GetLanguage("th-TH"), TextWrapping = TextWrapping.NoWrap };
         const string caption = "ดังนั้นซาตโต";
@@ -177,10 +182,6 @@ internal static class Program
                 overlay.Clear();
                 Pump(app);
             }
-            overlay.Preparing(capture);
-            Pump(app);
-            using (var preparing = VisibleScreenshot(overlay, capture))
-                Require(CountGreen(preparing) == 0, "Preparing must hide all original Japanese glyphs.");
             overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, frame: source);
             Pump(app);
             page.Content = new Border { Background = Brushes.LightPink };

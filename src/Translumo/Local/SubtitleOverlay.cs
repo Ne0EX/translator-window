@@ -84,7 +84,7 @@ public sealed class SubtitleOverlay : Window
             throw new ArgumentOutOfRangeException(nameof(style));
         if (frame is not null && (frame.PixelWidth != captureBounds.Width || frame.PixelHeight != captureBounds.Height))
             throw new ArgumentException("The held page must match the captured pixel dimensions.", nameof(frame));
-        if (regions.Count == 0 && frame is null) { Clear(); return; }
+        if (regions.Count == 0) { Clear(); return; }
 
         var (desktop, scaleX, scaleY) = PrepareWindow();
 
@@ -111,7 +111,7 @@ public sealed class SubtitleOverlay : Window
 
         if (style == SubtitleStyle.Overwrite)
             foreach (var mask in masks.Where(mask => mask.Width > 0 && mask.Height > 0))
-                visuals.Add((new Border { Background = Brushes.White }, mask));
+                visuals.Add((new Border { Background = MaskBrush(mask, captureBounds, backgroundPixels) }, mask));
 
         for (int i = 0; i < regions.Count; i++)
         {
@@ -128,7 +128,7 @@ public sealed class SubtitleOverlay : Window
             bool backgroundRejected = false;
             bool thai = translations[i].Any(character => character is >= '\u0e00' and <= '\u0e7f');
             var words = thai ? ThaiWords(translations[i]) : null;
-            // Prefer natural horizontal lines; narrow vertical OCR boxes are not subtitle columns.
+            // Keep captions tied to the recognized textbox; grow only enough to fit its translation.
             foreach (double fontSize in CaptionFontSizes(source.Height, scaleY))
             {
                 var text = new TextBlock {
@@ -138,7 +138,9 @@ public sealed class SubtitleOverlay : Window
                     TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.None
                 };
                 Brush? captionBackground = backgroundPixels is null ? Brushes.White : null;
-                foreach (double widthDip in new[] { Math.Max(source.Width * scaleX, 140), 120d, 100d, 180d, 220d, 260d, 360d, 480d, Math.Max(source.Width * scaleX, 80) }.Distinct())
+                double maxWidthDip = Math.Min(monitor.Width * scaleX, Math.Min(320, Math.Max(80, source.Width * scaleX * 2.5)));
+                foreach (double widthDip in new[] { source.Width * scaleX, source.Width * scaleX * 1.5,
+                    source.Width * scaleX * 2, maxWidthDip }.Select(width => Math.Min(width, maxWidthDip)).Distinct().Order())
                 {
                     int width = Math.Min(monitor.Width, (int)Math.Ceiling(widthDip / scaleX));
                     double insetX = padding * scaleX, insetY = padding * scaleY;
@@ -146,30 +148,21 @@ public sealed class SubtitleOverlay : Window
                     if (words is not null && !WrapWords(text, words, contentWidth)) continue;
                     text.Measure(new Size(contentWidth, double.PositiveInfinity));
                     int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
-                    double maxHeight = Math.Max(style == SubtitleStyle.Overlay ? source.Height * 2.4 : source.Height * 1.8,
-                        72 / scaleY);
+                    double maxHeight = source.Height * (style == SubtitleStyle.Overlay ? 2.4 : 1.8);
                     if (height > maxHeight || height > width * 1.6) continue;
-                    if (backgroundPixels is not null && SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
-                        blockers, false, padding) is not null)
-                        backgroundRejected = true;
                     if (backgroundPixels is not null)
                         captionBackground = null;
                     position = SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
                         blockers, style == SubtitleStyle.Overlay, padding, frame is null ? null
                             : candidate => {
-                                 captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels, frame, style);
+                                if (style == SubtitleStyle.Overwrite
+                                    && Math.Abs(candidate.Left + candidate.Width / 2 - (source.Left + source.Width / 2)) > Math.Max(32, source.Width / 2))
+                                    return false;
+                                captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels, frame, style);
                                 return captionBackground is not null;
                             });
-                    if (position is null && style == SubtitleStyle.Overwrite)
-                    {
-                        // Overwrite masks already cover the source; let a crowded page reuse nearby space.
-                        position = SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
-                            Array.Empty<Drawing.Rectangle>(), false, padding, frame is null ? null
-                                : candidate => {
-                                     captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels, frame, style);
-                                    return captionBackground is not null;
-                                });
-                    }
+                    if (position is null && style == SubtitleStyle.Overwrite && backgroundPixels is not null)
+                        backgroundRejected = true;
                     if (position is null) continue;
 
                     text.Foreground = ForegroundBrush(captionBackground!);
@@ -190,14 +183,6 @@ public sealed class SubtitleOverlay : Window
         // Commit only after every caption fits; failed layout keeps the last translated page visible.
         rollbackChildren ??= canvas.Children.Cast<UIElement>().ToArray();
         canvas.Children.Clear();
-        if (frame is not null && style == SubtitleStyle.Overwrite)
-        {
-            var image = new Image { Source = frame, Stretch = Stretch.Fill,
-                Width = captureBounds.Width * scaleX, Height = captureBounds.Height * scaleY };
-            Canvas.SetLeft(image, (captureBounds.X - desktop.X) * scaleX);
-            Canvas.SetTop(image, (captureBounds.Y - desktop.Y) * scaleY);
-            canvas.Children.Add(image);
-        }
         foreach (var (border, bounds) in visuals)
         {
             border.Width = bounds.Width * scaleX;
@@ -210,8 +195,8 @@ public sealed class SubtitleOverlay : Window
 
     internal static IEnumerable<double> CaptionFontSizes(int sourceHeight, double scaleY)
     {
-        double largest = Math.Clamp(Math.Round(sourceHeight * scaleY * 0.8), 20, 26);
-        for (double size = largest; size >= 8; size -= 2) yield return size;
+        double largest = Math.Clamp(Math.Round(sourceHeight * scaleY * 0.65), 10, 24);
+        for (double size = largest; size >= 8; size -= 1) yield return size;
     }
 
     internal static string[] ThaiWords(string value)
@@ -289,7 +274,8 @@ public sealed class SubtitleOverlay : Window
             return imageBrush;
         }
         if (pixels is null) return Brushes.White;
-        int samples = 0, minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
+        if (mask.Contains(caption)) return MaskBrush(mask, capture, pixels);
+        int samples = 0, bright = 0, minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
         long totalR = 0, totalG = 0, totalB = 0;
         for (int y = caption.Top; y < caption.Bottom; y += 2)
             for (int x = caption.Left; x < caption.Right; x += 2)
@@ -297,17 +283,62 @@ public sealed class SubtitleOverlay : Window
                 if (mask.Contains(x, y)) continue;
                 int offset = ((y - capture.Y) * capture.Width + x - capture.X) * 4;
                 int b = pixels[offset], g = pixels[offset + 1], r = pixels[offset + 2];
+                if (r >= 232 && g >= 232 && b >= 232) bright++;
                 minR = Math.Min(minR, r); minG = Math.Min(minG, g); minB = Math.Min(minB, b);
                 maxR = Math.Max(maxR, r); maxG = Math.Max(maxG, g); maxB = Math.Max(maxB, b);
                 totalR += r; totalG += g; totalB += b; samples++;
             }
-        if (samples == 0) return Brushes.White;
-        if (minR >= 240 && minG >= 240 && minB >= 240) return Brushes.White;
-        // ponytail: overwrite must hide the source even over textured artwork; white is the safe fallback.
-        if (maxR - minR > 32 || maxG - minG > 32 || maxB - minB > 32) return Brushes.White;
+        if (samples == 0 || bright >= samples * 0.95) return Brushes.White;
+        // ponytail: keep captions in a flat bubble; region-aware inpainting is needed for text on artwork.
+        if (maxR - minR > 32 || maxG - minG > 32 || maxB - minB > 32) return null;
         var brush = new SolidColorBrush(Color.FromRgb((byte)(totalR / samples), (byte)(totalG / samples), (byte)(totalB / samples)));
         brush.Freeze();
         return brush;
+    }
+
+    private static Brush MaskBrush(Drawing.Rectangle mask, Drawing.Rectangle capture, byte[]? pixels)
+    {
+        if (pixels is null) return Brushes.White;
+        if ((long)mask.Width * mask.Height > 30_000)
+        {
+            int tileHeight = 8;
+            int tileTop = mask.Top - tileHeight >= capture.Top ? mask.Top - tileHeight
+                : mask.Bottom + tileHeight <= capture.Bottom ? mask.Bottom : -1;
+            if (tileTop >= 0 && mask.Left >= capture.Left && mask.Right <= capture.Right)
+            {
+                var tile = new byte[mask.Width * tileHeight * 4];
+                for (int y = 0; y < tileHeight; y++)
+                {
+                    int offset = ((tileTop + y - capture.Y) * capture.Width + mask.Left - capture.X) * 4;
+                    Array.Copy(pixels, offset, tile, y * mask.Width * 4, mask.Width * 4);
+                }
+                var texture = BitmapSource.Create(mask.Width, tileHeight, 96, 96, PixelFormats.Bgra32, null, tile, mask.Width * 4);
+                texture.Freeze();
+                var brush = new ImageBrush(texture) {
+                    Stretch = Stretch.None, TileMode = TileMode.Tile, ViewportUnits = BrushMappingMode.Absolute,
+                    Viewport = new Rect(0, 0, mask.Width, tileHeight)
+                };
+                brush.Freeze();
+                return brush;
+            }
+        }
+        var sample = Drawing.Rectangle.Intersect(Drawing.Rectangle.Inflate(mask, 3, 3), capture);
+        long r = 0, g = 0, b = 0;
+        int count = 0, bright = 0;
+        for (int y = sample.Top; y < sample.Bottom; y += 2)
+            for (int x = sample.Left; x < sample.Right; x += 2)
+            {
+                if (mask.Contains(x, y)) continue;
+                int offset = ((y - capture.Y) * capture.Width + x - capture.X) * 4;
+                byte blue = pixels[offset], green = pixels[offset + 1], red = pixels[offset + 2];
+                b += blue; g += green; r += red; count++;
+                if (red >= 232 && green >= 232 && blue >= 232) bright++;
+            }
+        if (count == 0) return Brushes.White;
+        if (bright >= count * 0.7) return Brushes.White;
+        var color = new SolidColorBrush(Color.FromRgb((byte)(r / count), (byte)(g / count), (byte)(b / count)));
+        color.Freeze();
+        return color;
     }
 
     private static Brush ForegroundBrush(Brush background)
@@ -320,27 +351,6 @@ public sealed class SubtitleOverlay : Window
         }
         return Brushes.Black;
     }
-    public void Preparing(Drawing.Rectangle captureBounds)
-    {
-        Dispatcher.VerifyAccess();
-        if (captureBounds.Width <= 0 || captureBounds.Height <= 0)
-            throw new ArgumentOutOfRangeException(nameof(captureBounds));
-        var (desktop, scaleX, scaleY) = PrepareWindow();
-        rollbackChildren = null;
-        canvas.Children.Clear();
-        var cover = new Border {
-            Background = Brushes.White, Width = captureBounds.Width * scaleX, Height = captureBounds.Height * scaleY,
-            Padding = new Thickness(20), Child = new TextBlock {
-                Text = "Preparing translated page\u2026", FontSize = 18, Foreground = Brushes.Black,
-                TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
-            }
-        };
-        Canvas.SetLeft(cover, (captureBounds.X - desktop.X) * scaleX);
-        Canvas.SetTop(cover, (captureBounds.Y - desktop.Y) * scaleY);
-        canvas.Children.Add(cover);
-    }
-
     public void RefreshControlExclusion()
     {
         Dispatcher.VerifyAccess();

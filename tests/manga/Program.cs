@@ -73,18 +73,7 @@ internal static class Program
             running = session.RunAsync(() => ScreenCapture.GetWindowBounds(handle), "ja-vert", "th",
                 SubtitleStyle.Overwrite, 8, cancel.Token, hideOriginals: true);
             await Paint(overlay);
-            Require(frames == 0 && overlay.IsVisible, "Cold startup must cover the page before model inference completes.");
-            using (var preparing = VisiblePixels(overlay, bounds))
-            using (var original = new Drawing.Bitmap(Path.Combine(output, "live-original.png")))
-            {
-                preparing.Save(Path.Combine(output, "live-cold-start-covered.png"), Drawing.Imaging.ImageFormat.Png);
-                Require(!SamePixels(preparing, original), "Cold startup exposed the original page while loading the model.");
-                var bytes = Pixels(preparing);
-                int white = 0;
-                for (int offset = 0; offset < bytes.Length; offset += 4)
-                    if (bytes[offset] > 248 && bytes[offset + 1] > 248 && bytes[offset + 2] > 248) white++;
-                Require(white > preparing.Width * preparing.Height * 0.99, "Cold startup must fully cover the original page with the preparation view.");
-            }
+            Require(frames == 0 && !overlay.IsVisible, "Cold startup must leave the manga scene visible while models load.");
             await Until(() => frames >= 1, running, cancel.Token);
             await Paint(overlay);
             var firstCaptions = Captions(overlay);

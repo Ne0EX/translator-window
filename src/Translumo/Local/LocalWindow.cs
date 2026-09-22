@@ -78,7 +78,7 @@ public sealed class LocalWindow : Window
         LoadSettings();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 16) };
         buttons.Children.Add(start); buttons.Children.Add(stop); panel.Children.Add(buttons); panel.Children.Add(status);
-        panel.Children.Add(new TextBlock { Text = "Manga overwrite holds the translated page while the next view loads.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = "Manga overwrite covers detected text while keeping the page visible.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 10, 0, 0) });
         start.Click += async (_, _) => { running = StartAsync(); await running; };
         stop.Click += (_, _) => cancellation?.Cancel();
         mode.SelectionChanged += (_, _) => { UpdateCaptureControls(); status.Text = "Choose the capture target, then start translation."; };
@@ -176,7 +176,6 @@ public sealed class LocalWindow : Window
             var sourceCode = (string)source.SelectedValue;
             if (comics.IsChecked == true) sourceCode += "-comic";
             bool hideOriginals = comics.IsChecked == true && style.SelectedIndex == 1;
-            if (hideOriginals && getBounds() is Rectangle initialBounds) overlay.Preparing(initialBounds);
             status.Text = "Loading the local model…";
             var ocr = new SpatialOcr(Path.Combine(root, "models", "tessdata"), python.Text,
                 Path.Combine(root, "local-ocr", "worker.py"), Path.Combine(root, "models", "comic-text-detector", "comictextdetector.onnx"));

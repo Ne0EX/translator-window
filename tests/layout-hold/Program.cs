@@ -30,7 +30,7 @@ internal static class Program
         var statuses = new List<string>();
         var bounds = new Rectangle(80, 60, 600, 300);
         using var cancellation = new CancellationTokenSource();
-        var session = new LiveTranslationSession(new LocalTranslator(), overlay, statuses.Add);
+        var session = new LiveTranslationSession(new LocalTranslator(), overlay, message => { statuses.Add(message); Console.WriteLine(message); });
         ScreenCapture.Marker = 1;
         var running = session.RunAsync(() => bounds, "ja", "th", SubtitleStyle.Overwrite, 6,
             cancellation.Token, hideOriginals: true);
@@ -39,14 +39,17 @@ internal static class Program
             await Until(() => statuses.Any(s => s.Contains("translated blocks")), running);
             await overlay.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             var originalVisuals = ((Canvas)overlay.Content).Children.Cast<object>().ToArray();
-            Require(originalVisuals.Length == 3 && overlay.IsVisible, "The first translated page must be visible.");
+            Require(originalVisuals.Length == 2 && overlay.IsVisible
+                && originalVisuals.All(visual => visual is Border)
+                && originalVisuals.All(visual => visual is not System.Windows.Controls.Image),
+                "The first page must show only a local source mask and caption, without a full-page image layer.");
             ScreenCapture.Marker = 2;
             await Until(() => statuses.Any(s => s.Contains("not enough space")), running);
             await overlay.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             Require(!running.IsCompleted, "A layout failure must leave the live session running.");
-            Require(overlay.IsVisible && ((Canvas)overlay.Content).Children.Cast<object>().SequenceEqual(originalVisuals),
-                "A failed layout must retain exactly the previous artwork, mask and caption.");
-            Require(statuses.Last().Contains("previous view stays covered"), "The fit problem and held view must be explained.");
+            Require(!overlay.IsVisible && ((Canvas)overlay.Content).Children.Count == 0,
+                "A changed text box with an unreadable fit must clear stale artwork, mask and caption visuals.");
+            Require(statuses.Last().Contains("Watching for changes"), "A layout failure must explain that the stale caption was cleared.");
             int completed = statuses.Count(s => s.Contains("translated blocks"));
             ScreenCapture.Marker = 3;
             await Until(() => statuses.Count(s => s.Contains("translated blocks")) > completed, running);
@@ -56,7 +59,7 @@ internal static class Program
             try { await running.WaitAsync(TimeSpan.FromSeconds(10)); throw new Exception("Invalid model output was swallowed."); }
             catch (InvalidOperationException error) when (error is not SubtitleLayoutException && error.Message.Contains("empty translation")) { }
             Require(!overlay.IsVisible, "Fatal model errors must still end and clean up the session.");
-            Console.WriteLine("PASS: layout failure retains all previous visuals, session stays alive, next frame recovers, invalid model reply remains fatal.");
+            Console.WriteLine("PASS: layout failure clears stale visuals, session stays alive, next frame recovers, invalid model reply remains fatal.");
         }
         finally
         {
