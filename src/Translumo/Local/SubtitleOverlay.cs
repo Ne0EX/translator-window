@@ -29,6 +29,7 @@ public sealed class SubtitleLayoutException : InvalidOperationException
 public sealed class SubtitleOverlay : Window
 {
     private readonly Canvas canvas = new() { ClipToBounds = true, IsHitTestVisible = false };
+    private UIElement[]? rollbackChildren;
     private nint handle;
     public nint ControlsHandle { get; set; }
 
@@ -52,8 +53,21 @@ public sealed class SubtitleOverlay : Window
     public void Clear()
     {
         Dispatcher.VerifyAccess();
+        rollbackChildren = null;
         canvas.Children.Clear();
         Hide();
+    }
+
+    internal void ConfirmRender() => rollbackChildren = null;
+
+    internal void RestorePrevious()
+    {
+        Dispatcher.VerifyAccess();
+        if (rollbackChildren is null) return;
+        canvas.Children.Clear();
+        foreach (var child in rollbackChildren) canvas.Children.Add(child);
+        rollbackChildren = null;
+        if (canvas.Children.Count == 0) Hide(); else Show();
     }
 
     public void Render(Drawing.Rectangle captureBounds, IReadOnlyList<TextRegion> regions,
@@ -115,7 +129,7 @@ public sealed class SubtitleOverlay : Window
             bool thai = translations[i].Any(character => character is >= '\u0e00' and <= '\u0e7f');
             var words = thai ? ThaiWords(translations[i]) : null;
             // Prefer natural horizontal lines; narrow vertical OCR boxes are not subtitle columns.
-            foreach (double fontSize in new[] { 20d, 18d, 16d, 14d, 12d })
+            foreach (double fontSize in CaptionFontSizes(source.Height, scaleY))
             {
                 var text = new TextBlock {
                     Text = translations[i], FontFamily = new FontFamily(thai ? "Leelawadee UI" : "Segoe UI"), FontSize = fontSize,
@@ -132,25 +146,27 @@ public sealed class SubtitleOverlay : Window
                     if (words is not null && !WrapWords(text, words, contentWidth)) continue;
                     text.Measure(new Size(contentWidth, double.PositiveInfinity));
                     int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
-                    if (height > Math.Max(source.Height, 48 / scaleY) || height > width * 1.6) continue;
+                    double maxHeight = Math.Max(style == SubtitleStyle.Overlay ? source.Height * 2.4 : source.Height * 1.8,
+                        72 / scaleY);
+                    if (height > maxHeight || height > width * 1.6) continue;
                     if (backgroundPixels is not null && SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
                         blockers, false, padding) is not null)
                         backgroundRejected = true;
                     if (backgroundPixels is not null)
                         captionBackground = null;
                     position = SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
-                        blockers, style == SubtitleStyle.Overlay, padding, backgroundPixels is null ? null
+                        blockers, style == SubtitleStyle.Overlay, padding, frame is null ? null
                             : candidate => {
-                                captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels);
+                                 captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels, frame, style);
                                 return captionBackground is not null;
                             });
                     if (position is null && style == SubtitleStyle.Overwrite)
                     {
                         // Overwrite masks already cover the source; let a crowded page reuse nearby space.
                         position = SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
-                            Array.Empty<Drawing.Rectangle>(), false, padding, backgroundPixels is null ? null
+                            Array.Empty<Drawing.Rectangle>(), false, padding, frame is null ? null
                                 : candidate => {
-                                    captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels);
+                                     captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels, frame, style);
                                     return captionBackground is not null;
                                 });
                     }
@@ -172,8 +188,9 @@ public sealed class SubtitleOverlay : Window
         }
 
         // Commit only after every caption fits; failed layout keeps the last translated page visible.
+        rollbackChildren ??= canvas.Children.Cast<UIElement>().ToArray();
         canvas.Children.Clear();
-        if (frame is not null)
+        if (frame is not null && style == SubtitleStyle.Overwrite)
         {
             var image = new Image { Source = frame, Stretch = Stretch.Fill,
                 Width = captureBounds.Width * scaleX, Height = captureBounds.Height * scaleY };
@@ -189,6 +206,12 @@ public sealed class SubtitleOverlay : Window
             Canvas.SetTop(border, (bounds.Y - desktop.Y) * scaleY);
             canvas.Children.Add(border);
         }
+    }
+
+    internal static IEnumerable<double> CaptionFontSizes(int sourceHeight, double scaleY)
+    {
+        double largest = Math.Clamp(Math.Round(sourceHeight * scaleY * 0.8), 20, 26);
+        for (double size = largest; size >= 8; size -= 2) yield return size;
     }
 
     internal static string[] ThaiWords(string value)
@@ -250,9 +273,22 @@ public sealed class SubtitleOverlay : Window
     }
 
     private static Brush? BackgroundBrush(Drawing.Rectangle caption, Drawing.Rectangle mask,
-        Drawing.Rectangle capture, byte[] pixels)
+        Drawing.Rectangle capture, byte[]? pixels, BitmapSource? frame, SubtitleStyle style)
     {
-        if (!capture.Contains(caption)) return null;
+        if (!capture.Contains(caption)) return style == SubtitleStyle.Overlay ? Brushes.White : null;
+        if (style == SubtitleStyle.Overlay && frame is not null)
+        {
+            var imageBrush = new ImageBrush(frame) {
+                Stretch = Stretch.Fill,
+                ViewboxUnits = BrushMappingMode.Absolute,
+                Viewbox = new Rect(caption.X - capture.X, caption.Y - capture.Y, caption.Width, caption.Height),
+                ViewportUnits = BrushMappingMode.RelativeToBoundingBox,
+                Viewport = new Rect(0, 0, 1, 1)
+            };
+            imageBrush.Freeze();
+            return imageBrush;
+        }
+        if (pixels is null) return Brushes.White;
         int samples = 0, minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
         long totalR = 0, totalG = 0, totalB = 0;
         for (int y = caption.Top; y < caption.Bottom; y += 2)
@@ -290,6 +326,7 @@ public sealed class SubtitleOverlay : Window
         if (captureBounds.Width <= 0 || captureBounds.Height <= 0)
             throw new ArgumentOutOfRangeException(nameof(captureBounds));
         var (desktop, scaleX, scaleY) = PrepareWindow();
+        rollbackChildren = null;
         canvas.Children.Clear();
         var cover = new Border {
             Background = Brushes.White, Width = captureBounds.Width * scaleX, Height = captureBounds.Height * scaleY,

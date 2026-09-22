@@ -34,6 +34,7 @@ public sealed class LiveTranslationSession
         long changedAt = 0;
         int processedVersion = -1;
         Task<TranslatedFrame?>? pending = null;
+        CancellationTokenSource? pendingCancellation = null;
         try
         {
             while (!token.IsCancellationRequested)
@@ -44,12 +45,23 @@ public sealed class LiveTranslationSession
                 {
                     if (previousHash is not null)
                     {
+                        pendingCancellation?.Cancel();
                         _version++;
                         previousHash = null;
                         _overlay.Clear();
                     }
                     _status("Waiting for the selected window to be visible…");
-                    if (pending is { IsCompleted: true }) { await pending; pending = null; }
+                    if (pending is { IsCompleted: true })
+                    {
+                        try { await pending; }
+                        catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                        finally
+                        {
+                            pending = null;
+                            pendingCancellation?.Dispose();
+                            pendingCancellation = null;
+                        }
+                    }
                 }
                 else
                 {
@@ -58,6 +70,7 @@ public sealed class LiveTranslationSession
                     if (previousHash is null || !hash.AsSpan().SequenceEqual(previousHash) || bounds.Value != previousBounds)
                     {
                         bool needsCover = previousHash is null || bounds.Value != previousBounds;
+                        pendingCancellation?.Cancel();
                         _version++;
                         previousHash = hash;
                         previousBounds = bounds.Value;
@@ -67,23 +80,33 @@ public sealed class LiveTranslationSession
                     }
                     if (pending is { IsCompleted: true })
                     {
-                        var result = await pending;
-                        pending = null;
+                        TranslatedFrame? result = null;
+                        try { result = await pending; }
+                        catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                        finally
+                        {
+                            pending = null;
+                            pendingCancellation?.Dispose();
+                            pendingCancellation = null;
+                        }
                         if (result is not null && result.Version == _version)
                         {
                             try
                             {
                                 _overlay.Render(result.Bounds, result.Regions, result.Translations, style, padding, result.Frame);
+                                _overlay.ConfirmRender();
                                 var unreadable = result.UnreadableCount > 0 ? $" \u00b7 {result.UnreadableCount} unreadable blocks; try zooming in" : "";
                                 _status($"{result.Regions.Count - result.UnreadableCount} translated blocks \u00b7 {result.ElapsedMs:N0} ms \u00b7 local model{unreadable}");
                             }
                             catch (SubtitleLayoutException error) when (error.BackgroundRejected
                                 && style == SubtitleStyle.Overwrite && hideOriginals)
                             {
+                                _overlay.RestorePrevious();
                                 _status(error.Message + " The previous view stays covered while watching for changes.");
                             }
                             catch (SubtitleLayoutException error)
                             {
+                                _overlay.RestorePrevious();
                                 _status(error.Message + (hideOriginals ? " The previous view stays covered while watching for changes." : " Watching for changes."));
                             }
                         }
@@ -92,8 +115,9 @@ public sealed class LiveTranslationSession
                     if (pending is null && processedVersion != _version && Environment.TickCount64 - changedAt >= 160)
                     {
                         processedVersion = _version;
+                        pendingCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
                         pending = TranslateFrameAsync((Bitmap)bitmap.Clone(), bounds.Value, _version,
-                            source, target, style, padding, token, hideOriginals);
+                            source, target, style, padding, pendingCancellation.Token, hideOriginals);
                     }
                 }
                 await Task.Delay(100, token);
@@ -103,16 +127,18 @@ public sealed class LiveTranslationSession
         {
             _version++;
             _overlay.Clear();
+            pendingCancellation?.Cancel();
             try
             {
                 if (pending is not null)
                 {
                     try { await pending; }
-                    catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested || pendingCancellation?.IsCancellationRequested == true) { }
                 }
             }
             finally
             {
+                pendingCancellation?.Dispose();
                 try { await warmup; }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { }
                 finally { _ocr.Dispose(); }
@@ -142,9 +168,10 @@ public sealed class LiveTranslationSession
                 _status("Watching for text…");
                 return new(version, bounds, regions, Array.Empty<string>(), timer.ElapsedMilliseconds, null, 0);
             }
-            if (style == SubtitleStyle.Overwrite && !hideOriginals)
+            BitmapSource? frame = style == SubtitleStyle.Overlay || hideOriginals ? Snapshot(bitmap) : null;
+            if (style == SubtitleStyle.Overwrite || style == SubtitleStyle.Overlay)
             {
-                try { _overlay.Render(bounds, regions, regions.Select(_ => "\u2026").ToArray(), style, padding); }
+                try { _overlay.Render(bounds, regions, regions.Select(_ => "\u2026").ToArray(), style, padding, frame); }
                 catch (SubtitleLayoutException) { /* Continue translating; the final caption may fit differently. */ }
             }
             _status($"Translating {regions.Count} text blocks on this computer…");
@@ -156,7 +183,7 @@ public sealed class LiveTranslationSession
             }
             for (int i = 0; i < regions.Count; i++)
                 if (string.IsNullOrWhiteSpace(regions[i].Text)) translations[i] = "\u2026";
-            return new(version, bounds, regions, translations, timer.ElapsedMilliseconds, hideOriginals ? Snapshot(bitmap) : null, unreadable);
+            return new(version, bounds, regions, translations, timer.ElapsedMilliseconds, frame, unreadable);
         }
     }
 
