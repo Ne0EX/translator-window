@@ -1,4 +1,4 @@
-name: PR. Build
+﻿name: PR. Build
 
 on:
   workflow_dispatch:
@@ -23,7 +23,10 @@ jobs:
     - name: Install .NET Core
       uses: actions/setup-dotnet@v3
       with:
-        dotnet-version: 7.0.x
+        dotnet-version: 8.0.x
         
     - name: Build the application
       run: dotnet build $env:Solution_Name /p:Configuration=Release
+
+    - name: Check subtitle geometry
+      run: dotnet run --project tests/overlay/OverlayCheck.csproj

@@ -407,3 +407,11 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Local toolchain and model weights
+.tools/
+.venv/
+.cache/
+models/
+artifacts/
+__pycache__/

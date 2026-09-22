@@ -1,0 +1,342 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Globalization;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Interop;
+using System.Windows.Markup;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Drawing = System.Drawing;
+using Forms = System.Windows.Forms;
+
+namespace Translumo.Local;
+
+public enum SubtitleStyle { Overlay, Overwrite }
+
+public sealed class SubtitleLayoutException : InvalidOperationException
+{
+    public SubtitleLayoutException() : base("There is not enough space for readable subtitles. Select a smaller set of text or zoom the page out.") { }
+}
+
+public sealed class SubtitleOverlay : Window
+{
+    private readonly Canvas canvas = new() { ClipToBounds = true, IsHitTestVisible = false };
+    private nint handle;
+    public nint ControlsHandle { get; set; }
+
+    public SubtitleOverlay()
+    {
+        Title = "Local translator subtitles";
+        WindowStyle = WindowStyle.None;
+        ResizeMode = ResizeMode.NoResize;
+        AllowsTransparency = true;
+        Background = Brushes.Transparent;
+        ShowInTaskbar = false;
+        ShowActivated = false;
+        Focusable = false;
+        IsHitTestVisible = false;
+        Topmost = true;
+        Width = Height = 1;
+        Content = canvas;
+        SourceInitialized += (_, _) => ConfigureNativeWindow();
+    }
+
+    public void Clear()
+    {
+        Dispatcher.VerifyAccess();
+        canvas.Children.Clear();
+        Hide();
+    }
+
+    public void Render(Drawing.Rectangle captureBounds, IReadOnlyList<TextRegion> regions,
+        IReadOnlyList<string> translations, SubtitleStyle style, int padding = 6, BitmapSource? frame = null)
+    {
+        Dispatcher.VerifyAccess();
+        ArgumentNullException.ThrowIfNull(regions);
+        ArgumentNullException.ThrowIfNull(translations);
+        if (regions.Count != translations.Count)
+            throw new ArgumentException("Each recognized text region needs one translation.");
+        if (captureBounds.Width <= 0 || captureBounds.Height <= 0 || padding < 0 || padding > 100)
+            throw new ArgumentOutOfRangeException(nameof(captureBounds));
+        if (style is not SubtitleStyle.Overlay and not SubtitleStyle.Overwrite)
+            throw new ArgumentOutOfRangeException(nameof(style));
+        if (frame is not null && (frame.PixelWidth != captureBounds.Width || frame.PixelHeight != captureBounds.Height))
+            throw new ArgumentException("The held page must match the captured pixel dimensions.", nameof(frame));
+        if (regions.Count == 0 && frame is null) { Clear(); return; }
+
+        var (desktop, scaleX, scaleY) = PrepareWindow();
+
+        var sources = regions.Select(region => {
+            var clipped = Drawing.Rectangle.Intersect(region.Bounds,
+                new Drawing.Rectangle(0, 0, captureBounds.Width, captureBounds.Height));
+            clipped.Offset(captureBounds.Location);
+            return clipped;
+        }).ToArray();
+        var masks = sources.Select(source => {
+            if (source.Width <= 0 || source.Height <= 0) return Drawing.Rectangle.Empty;
+            source.Inflate(padding, padding);
+            return Drawing.Rectangle.Intersect(source, desktop);
+        }).ToArray();
+        byte[]? backgroundPixels = null;
+        if (frame is not null && style == SubtitleStyle.Overwrite)
+        {
+            var background = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+            backgroundPixels = new byte[checked(frame.PixelWidth * frame.PixelHeight * 4)];
+            background.CopyPixels(backgroundPixels, frame.PixelWidth * 4, 0);
+        }
+        var placed = new List<Drawing.Rectangle>();
+        var visuals = new List<(Border Border, Drawing.Rectangle Bounds)>();
+
+        if (style == SubtitleStyle.Overwrite)
+            foreach (var mask in masks.Where(mask => mask.Width > 0 && mask.Height > 0))
+                visuals.Add((new Border { Background = Brushes.White }, mask));
+
+        for (int i = 0; i < regions.Count; i++)
+        {
+            if (sources[i].Width <= 0 || sources[i].Height <= 0) continue;
+            if (string.IsNullOrWhiteSpace(translations[i]))
+                throw new InvalidOperationException("The local model returned an empty translation; subtitles were not shown.");
+            var source = masks[i];
+            var monitor = Forms.Screen.FromPoint(new Drawing.Point(source.Left + source.Width / 2,
+                source.Top + source.Height / 2)).Bounds;
+            var blockers = masks.Where((mask, index) => index != i && mask.Width > 0 && mask.Height > 0)
+                .Concat(placed).ToArray();
+            Border? caption = null;
+            Drawing.Rectangle? position = null;
+            bool thai = translations[i].Any(character => character is >= '\u0e00' and <= '\u0e7f');
+            var words = thai ? ThaiWords(translations[i]) : null;
+            // Prefer natural horizontal lines; narrow vertical OCR boxes are not subtitle columns.
+            foreach (double fontSize in new[] { 20d, 18d, 16d, 14d, 12d })
+            {
+                var text = new TextBlock {
+                    Text = translations[i], FontFamily = new FontFamily(thai ? "Leelawadee UI" : "Segoe UI"), FontSize = fontSize,
+                    Language = XmlLanguage.GetLanguage(thai ? "th-TH" : "en-US"),
+                    Foreground = Brushes.Black, TextWrapping = thai ? TextWrapping.NoWrap : TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.None
+                };
+                foreach (double widthDip in new[] { Math.Max(source.Width * scaleX, 140), 120d, 100d, 180d, 220d, 260d, 360d, 480d, Math.Max(source.Width * scaleX, 80) }.Distinct())
+                {
+                    int width = Math.Min(monitor.Width, (int)Math.Ceiling(widthDip / scaleX));
+                    double insetX = padding * scaleX, insetY = padding * scaleY;
+                    double contentWidth = Math.Max(1, width * scaleX - insetX * 2);
+                    if (words is not null && !WrapWords(text, words, contentWidth)) continue;
+                    text.Measure(new Size(contentWidth, double.PositiveInfinity));
+                    int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
+                    if (height > Math.Max(source.Height, 48 / scaleY) || height > width * 1.6) continue;
+                    position = SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
+                        blockers, style == SubtitleStyle.Overlay, padding, backgroundPixels is null ? null
+                            : candidate => FitsWhiteBackground(candidate, source, captureBounds, backgroundPixels));
+                    if (position is null) continue;
+
+                    caption = new Border {
+                        Background = Brushes.White, Padding = new Thickness(insetX, insetY, insetX, insetY),
+                        Child = text
+                    };
+                    break;
+                }
+                if (caption is not null) break;
+            }
+            if (caption is null || position is null)
+                throw new SubtitleLayoutException();
+            placed.Add(position.Value);
+            visuals.Add((caption, position.Value));
+        }
+
+        // Commit only after every caption fits; failed layout keeps the last translated page visible.
+        canvas.Children.Clear();
+        if (frame is not null)
+        {
+            var image = new Image { Source = frame, Stretch = Stretch.Fill,
+                Width = captureBounds.Width * scaleX, Height = captureBounds.Height * scaleY };
+            Canvas.SetLeft(image, (captureBounds.X - desktop.X) * scaleX);
+            Canvas.SetTop(image, (captureBounds.Y - desktop.Y) * scaleY);
+            canvas.Children.Add(image);
+        }
+        foreach (var (border, bounds) in visuals)
+        {
+            border.Width = bounds.Width * scaleX;
+            border.Height = bounds.Height * scaleY;
+            Canvas.SetLeft(border, (bounds.X - desktop.X) * scaleX);
+            Canvas.SetTop(border, (bounds.Y - desktop.Y) * scaleY);
+            canvas.Children.Add(border);
+        }
+    }
+
+    internal static string[] ThaiWords(string value)
+    {
+        // Windows supplies dictionary boundaries for Thai, whose words are not separated by spaces.
+        var tokens = new Windows.Data.Text.WordsSegmenter("th").GetTokens(value);
+        var textElements = StringInfo.ParseCombiningCharacters(value).ToHashSet();
+        var words = new List<string>();
+        int start = 0;
+        for (int i = 1; i < tokens.Count; i++)
+        {
+            int end = (int)tokens[i].SourceTextSegment.StartPosition;
+            // The dictionary may split before a Thai tone mark; keep the complete grapheme together.
+            if (!textElements.Contains(end)) continue;
+            words.Add(value[start..end]);
+            start = end;
+        }
+        words.Add(value[start..]);
+        return words.ToArray();
+    }
+
+    internal static bool WrapWords(TextBlock text, IReadOnlyList<string> words, double width)
+    {
+        // Minimize line count first, then balance the lines so a short final word is not stranded.
+        var counts = Enumerable.Repeat(int.MaxValue, words.Count + 1).ToArray();
+        var costs = new double[words.Count + 1];
+        var next = new int[words.Count];
+        counts[words.Count] = 0;
+        for (int start = words.Count - 1; start >= 0; start--)
+        {
+            string line = "";
+            for (int end = start; end < words.Count; end++)
+            {
+                line += words[end];
+                text.Text = line.Trim();
+                text.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                double remaining = width - text.DesiredSize.Width;
+                if (remaining < 0) break;
+                if (counts[end + 1] == int.MaxValue) continue;
+                int count = counts[end + 1] + 1;
+                double cost = remaining * remaining + costs[end + 1];
+                if (count < counts[start] || count == counts[start] && cost < costs[start])
+                {
+                    counts[start] = count;
+                    costs[start] = cost;
+                    next[start] = end + 1;
+                }
+            }
+        }
+        if (counts[0] == int.MaxValue) return false;
+        var lines = new StringBuilder();
+        for (int start = 0; start < words.Count; start = next[start])
+        {
+            if (lines.Length > 0) lines.AppendLine();
+            lines.Append(string.Concat(words.Skip(start).Take(next[start] - start)).Trim());
+        }
+        text.Text = lines.ToString();
+        return true;
+    }
+
+    private static bool FitsWhiteBackground(Drawing.Rectangle caption, Drawing.Rectangle mask,
+        Drawing.Rectangle capture, byte[] pixels)
+    {
+        if (!capture.Contains(caption)) return false;
+        // ponytail: white speech bubbles; colored/art backgrounds need bubble segmentation and color-aware masks.
+        for (int y = caption.Top; y < caption.Bottom; y += 2)
+            for (int x = caption.Left; x < caption.Right; x += 2)
+            {
+                if (mask.Contains(x, y)) continue;
+                int offset = ((y - capture.Y) * capture.Width + x - capture.X) * 4;
+                if (pixels[offset] < 240 || pixels[offset + 1] < 240 || pixels[offset + 2] < 240) return false;
+            }
+        return true;
+    }
+    public void Preparing(Drawing.Rectangle captureBounds)
+    {
+        Dispatcher.VerifyAccess();
+        if (captureBounds.Width <= 0 || captureBounds.Height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(captureBounds));
+        var (desktop, scaleX, scaleY) = PrepareWindow();
+        canvas.Children.Clear();
+        var cover = new Border {
+            Background = Brushes.White, Width = captureBounds.Width * scaleX, Height = captureBounds.Height * scaleY,
+            Padding = new Thickness(20), Child = new TextBlock {
+                Text = "Preparing translated page\u2026", FontSize = 18, Foreground = Brushes.Black,
+                TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+        Canvas.SetLeft(cover, (captureBounds.X - desktop.X) * scaleX);
+        Canvas.SetTop(cover, (captureBounds.Y - desktop.Y) * scaleY);
+        canvas.Children.Add(cover);
+    }
+
+    public void RefreshControlExclusion()
+    {
+        Dispatcher.VerifyAccess();
+        if (handle == 0) return;
+        var desktop = Forms.SystemInformation.VirtualScreen;
+        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice;
+        if (transform is null) return;
+        var clip = new RectangleGeometry(new Rect(0, 0, desktop.Width * transform.Value.M11, desktop.Height * transform.Value.M22));
+        if (ControlsHandle != 0 && IsWindowVisible(ControlsHandle) && !IsIconic(ControlsHandle)
+            && GetWindowRect(ControlsHandle, out var controls))
+        {
+            var hole = new RectangleGeometry(new Rect((controls.Left - desktop.X) * transform.Value.M11,
+                (controls.Top - desktop.Y) * transform.Value.M22,
+                (controls.Right - controls.Left) * transform.Value.M11, (controls.Bottom - controls.Top) * transform.Value.M22));
+            canvas.Clip = new CombinedGeometry(GeometryCombineMode.Exclude, clip, hole);
+        }
+        else canvas.Clip = clip;
+    }
+    private (Drawing.Rectangle Desktop, double ScaleX, double ScaleY) PrepareWindow()
+    {
+        new WindowInteropHelper(this).EnsureHandle();
+        // A tight area selection may have no room beside its text. Let captions use its monitor.
+        var desktop = Forms.SystemInformation.VirtualScreen;
+        if (!IsVisible) Show();
+        if (!SetWindowPos(handle, new nint(-1), desktop.X, desktop.Y, desktop.Width, desktop.Height, 0x0010 | 0x0200))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot position the subtitle overlay.");
+
+        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice
+            ?? throw new InvalidOperationException("Subtitle overlay has no display transform.");
+        double scaleX = transform.M11, scaleY = transform.M22;
+        canvas.Width = desktop.Width * scaleX;
+        canvas.Height = desktop.Height * scaleY;
+
+        RefreshControlExclusion();
+        return (desktop, scaleX, scaleY);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
+    [DllImport("user32.dll")] private static extern bool IsIconic(nint hwnd);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(nint hwnd, out NativeRect rectangle);
+    private void ConfigureNativeWindow()
+    {
+        handle = new WindowInteropHelper(this).Handle;
+        // Layered + transparent makes clicks pass through to other applications, including scrolling.
+        const int index = -20;
+        int style = GetWindowLong(handle, index) | 0x00000020 | 0x00000080 | 0x08000000;
+        Marshal.SetLastPInvokeError(0);
+        if (SetWindowLong(handle, index, style) == 0 && Marshal.GetLastPInvokeError() != 0)
+            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Cannot make subtitles click-through.");
+        HwndSource.FromHwnd(handle)?.AddHook((nint _, int message, nint wParam, nint lParam, ref bool handled) => {
+            if (message == 0x0084) { handled = true; return new nint(-1); } // HTTRANSPARENT
+            if (message == 0x0021) { handled = true; return new nint(3); } // MA_NOACTIVATE
+            return nint.Zero;
+        });
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041)
+            || !SetWindowDisplayAffinity(handle, 0x00000011)
+            || !GetWindowDisplayAffinity(handle, out uint affinity) || affinity != 0x00000011)
+            throw new InvalidOperationException("Windows cannot exclude the subtitle overlay from capture. Windows 10 version 2004 or newer and desktop composition are required; translation was stopped to prevent OCR feedback.");
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetWindowLong(nint hwnd, int index);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int SetWindowLong(nint hwnd, int index, int value);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(nint hwnd, nint insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowDisplayAffinity(nint hwnd, uint affinity);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowDisplayAffinity(nint hwnd, out uint affinity);
+}
+
+
+
+
+

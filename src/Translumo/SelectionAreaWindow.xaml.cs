@@ -148,7 +148,7 @@ namespace Translumo
 
         private void SelectionAreaWindow_OnKeyDown(object sender, KeyEventArgs e)
         {
-            if (_readonlyMode)
+            if (_readonlyMode || e.Key == Key.Escape)
             {
                 CloseDialog(true);
             }

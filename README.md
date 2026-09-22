@@ -1,132 +1,116 @@
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Github All Releases](https://img.shields.io/github/downloads/ramjke/Translumo/total.svg)]()
+# Translumo Local
 
-<p align="center">
-  <img width="670" src="https://github.com/ramjke/Translumo/assets/29047281/8985049f-ea1c-428e-94be-042ece66cb54">
-</p>
-  <h2 align="center" style="border: 0">Advanced Real-Time Screen Translator</h2>
+A Windows fork of [ramjke/Translumo](https://github.com/ramjke/Translumo).
+OCR and translation run on your computer. The executable excludes the upstream
+cloud translators, proxy tools, updater, and automatic runtime downloads.
 
-<p align="center"><strong>English</strong> | <a href="docs/README-RU.md"><strong>Русский</strong></a></p>
+Choose **selected area**, **window**, or **screen**, independently of presentation:
 
-## Sibling Project
-This project has a sibling called **[Lookupper](https://lookupper.com)** — a screen dictionary for language learning. It is similar to Translumo but built for a different purpose. Lookupper is built to help you *learn* a language, not just depend on a translator forever.
+- **Subtitle overlay** places translations beside recognized text.
+- **Subtitle overwrite** covers recognized text with opaque translated captions.
 
-Lookupper is commercial project with a free version. If you find it useful and decide to grab the Pro version, you'll also be supporting the development of both Lookupper and Translumo.
+Korean, Japanese, English, and Thai are selectable as source and target languages.
+The default is **Japanese → Thai**, with **Manga / webtoon text detection** and
+**Subtitle overwrite** enabled. Japanese manga recognition handles both vertical
+and horizontal dialogue automatically.
 
-## Download Translumo
+## Run
 
-**Direct download link to the latest version:**  
-[Translumo_1.1.0.zip](https://github.com/ramjke/Translumo/releases/download/v.1.1.0/Translumo_1.1.0.zip)   
-After downloading, unzip the archive and run `Translumo.exe`.
+On this prepared machine, double-click **Start Translator.cmd**.
 
-Version 1.1.0 moves DeepL and Yandex onto their official APIs, so both now need an API key. Google Translate still works with no setup. The full list of changes is on the [Releases page](https://github.com/ramjke/Translumo/releases).
+On another Windows 10 (2004+) / Windows 11 x64 machine, install Python 3.12 and the
+[Microsoft Visual C++ x64 runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe), then run:
 
-## Main Features
+```powershell
+.\scripts\setup.ps1
+# For the tested NVIDIA CUDA configuration:
+.\scripts\setup.ps1 -Cuda
+# Or specify Python explicitly:
+.\scripts\setup.ps1 -Python 'C:\path\to\python.exe' -Cuda
+```
 
-- **High text recognition precision**  
-  Translumo allows combining multiple OCR engines simultaneously. It uses a machine learning model to score each OCR result and selects the best one.  
+Setup downloads the workspace .NET SDK, Python dependencies, OCR data, and pinned
+local model weights. Allow several GB for installed models and caches. Runtime
+recognition and translation work offline. CPU inference is available; NVIDIA CUDA
+is recommended for manga reading.
 
-  <p align="center">
-    <img width="740" src="https://github.com/ramjke/Translumo/assets/29047281/649e5fab-a5de-4c54-a3d8-f7ea95b8f218">
-  </p>
+Keep the project folder together: the app is in `artifacts/app`, Python in `.venv`,
+and weights in `models/hy-mt2`, `models/tessdata`, `models/comic-text-detector`, and
+`models/manga-ocr`. A Python virtual environment is machine-specific: run setup
+on each machine instead of copying its environment.
 
-- **Game oriented**  
-  Designed for real-time translation in PC games, but works anywhere on the screen with any application.
+Choose a capture mode, select its area/window/screen, then start. Window mode
+tracks the visible window as it moves and pauses when it is minimized. Keep the
+source visible; this is desktop capture. Clicks and scrolling pass through subtitles.
+Escape cancels area selection. Stop removes subtitles and releases the models.
 
-- **Low latency**  
-  Several optimizations reduce system impact and minimize latency between text appearance and translation.
+Manga overwrite first covers the selected view while the models load. It then shows
+captured artwork with translated captions over the detected source text. While you
+scroll, it holds the last translated image until the next stable view is ready.
+This briefly freezes the displayed page instead of exposing newly scrolled source
+text. Detected blocks that cannot be read stay masked with an ellipsis while readable
+neighbors translate; the status reports the unreadable count. If a new view has no
+detected or readable text, it retains the previous view and reports that condition.
+The controls remain visible so you can stop or change the selection.
 
-- **Integrated modern OCR engines**: Windows OCR (recommended), EasyOCR
+Cover padding adjusts the mask around detected text. Disable manga detection for
+ordinary desktop text; that path uses installed Windows OCR with local Tesseract
+fallback. Ordinary overwrite covers recognized text while translation runs, but
+does not hold the entire page during motion.
 
-- **Available translators**: Google Translate (works out of the box), DeepL (needs a free API key), Yandex Translate (needs a Yandex Cloud API key).
+## Build and verify
 
-- **Supported recognition languages**: English, Russian, Japanese, Chinese (Simplified), Korean.
+```powershell
+.\scripts\build.ps1
+.\.venv\Scripts\python.exe local-model/check.py --model models/hy-mt2
+.\.tools\dotnet\dotnet.exe run --project local-model/check/BridgeCheck.csproj -- .venv/Scripts/python.exe
+.\.tools\dotnet\dotnet.exe run --project tests/OcrSmoke/OcrSmoke.csproj -- models/tessdata
+.\.tools\dotnet\dotnet.exe run --project tests/unreadable/UnreadableCheck.csproj -- .
+.\.tools\dotnet\dotnet.exe run --project tests/layout-hold/LayoutHoldCheck.csproj
+.\.tools\dotnet\dotnet.exe run --project tests/overlay/OverlayCheck.csproj -- --visual
+.\.tools\dotnet\dotnet.exe run --project tests/integration/IntegrationCheck.csproj -- .
+```
 
-- **Supported translation languages**: English, Russian, Japanese, Chinese (Simplified), Korean, French, Spanish, German, Portuguese, Italian, Vietnamese, Thai, Turkish, Arabic, Greek, Brazilian Portuguese, Polish, Belarusian, Persian, Indonesian, Bulgarian, Czech, Danish, Estonian, Finnish, Hungarian, Lithuanian, Latvian, Dutch, Romanian, Slovak, Slovenian, Swedish, Ukrainian.
+The unreadable-region check uses stub workers and does not open windows or load GPU models.
+Run visual checks one at a time on an unlocked desktop. They temporarily display
+test windows. The integration check exercises all six capture/style combinations
+with real Japanese OCR and Thai translation, then changed text, moved/resized
+windows, minimize/restore, and cancellation. Generated evidence stays in ignored
+`artifacts/` and `.cache/verification/` folders.
 
-## System Requirements
+The optional real manga check needs the locally acquired, unscaled 1273 × 1800
+fixture and a display that fits it. Fixture attribution and acquisition details are
+in `artifacts/manga-test/source.md`; copyrighted fixture files are not in the repo.
 
-### Minimal requirements to use Windows OCR
-- Windows 10 version 2004 (build 19041) or later, or Windows 11
-- DirectX 11 compatible GPU
-- 2 GB RAM
+```powershell
+.\.venv\Scripts\python.exe local-ocr/check_scroll.py --model models/comic-text-detector/comictextdetector.onnx --image artifacts/manga-test/page12.png
+.\.tools\dotnet\dotnet.exe run --project tests/manga/MangaCheck.csproj -- . artifacts/manga-test/page12.png
+```
 
-### Minimal requirements to use EasyOCR
-- NVIDIA GPU with CUDA SDK 11.8 support (GTX 750, 8xxM, 9xx series or newer)
-- 8 GB RAM
-- At least 5 GB of free storage space
+## Current limits
 
-## How to Use
+The local model can mistranslate proper names, omitted subjects, and short dialogue.
+The [measured model comparison](local-model/QUALITY.md) records these limits; successful
+OCR and target-language output do not establish human-quality translation.
+Seamless manga/webtoon reading remains an acceptance goal, not a guarantee for all
+pages: stylized text can evade detection, small text needs zooming, and rectangular
+white masks can cover artwork. This does not perform image inpainting. Dense pages
+can run out of readable caption space; failed layouts keep the previous view covered
+and report fitting guidance. Whole-frame animation can prevent a view
+from settling; mixed-DPI multiple-monitor behavior needs a physical hardware test.
 
-![Preview](https://github.com/ramjke/Translumo/blob/7f4a73ffba0e5a0090ea0bfc3d72acb99832a0f4/docs/preview-EN.gif)
+See [translation runtime](local-model/README.md), [manga OCR](local-ocr/README.md),
+[implementation and evidence](docs/implementation-plan.md), and
+[upstream README](docs/upstream-README.md). Upstream source remains for history and
+reference; only the local application project is built.
 
-1. Open the Settings (**Alt+G**)
-2. Select languages: source language for OCR and translation language
-3. Select text recognition engines (see Usage Tips for recommended modes)
-4. Define the capture area: press **Alt+Q** and select an area on the screen
-5. Run translation (press **~**)
+## Licenses
 
-### Which OCR Engine to Use
-
-**WindowsOCR** is fast, and for most text it is all you need.
-
-EasyOCR is worth turning on when the text uses an unusual font or sits on a busy background — it copes with that noticeably better. In exchange it is slower and needs an Nvidia GPU.
-
-### Select Minimum Capture Area
-Reducing the capture area decreases the chance of picking up random letters from the background. Larger frames take longer to process.
-
-### Set Up the DeepL API Key
-DeepL works through its official API, so it needs a key. Create one for free at [deepl.com/pro-api](https://www.deepl.com/pro-api) — the free plan covers 500,000 characters per month — then paste it into **Languages -> DeepL API key**. The field only appears when DeepL is selected as the translator. Both free and paid keys work; Translumo picks the right endpoint automatically.
-
-### Set Up the Yandex API Key
-Yandex Translate also works through its official API. Create an API key in the [Yandex Cloud console](https://yandex.cloud/en/docs/iam/operations/api-key/create) for a service account with the `ai.translate.user` role, then paste it into **Languages -> Yandex API key**. The field only appears when Yandex is selected as the translator.
-
-### Use Borderless or Windowed Modes in Games (Not Fullscreen)
-These modes are required for correct translation overlay display. If your game does not support them, use tools like [Borderless Gaming](https://github.com/Codeusa/Borderless-Gaming).
-
-## FAQ
-
-**Q: I get "Failed to capture screen" or nothing happens after translation starts**  
-A: Ensure the target window is active. Restart Translumo or reopen the target window if needed.
-
-**Q: Borderless/windowed mode is set, but the translation window is under the game**  
-A: With the game running and focused, press the hotkey (**Alt+T** by default) to hide and show the translation window.
-
-**Q: EasyOCR package download failed**  
-A: Try reinstalling while connected to a VPN.
-
-**Q: DeepL does not translate**  
-A: Check the API key in **Languages -> DeepL API key**. "The API key was rejected" means the key is wrong or expired; "translation quota exceeded" means the monthly character limit for that key is used up.
-
-**Q: Yandex does not translate**  
-A: Check the API key in **Languages -> Yandex API key**. "The API key was rejected" means the key is wrong; "no access to the translate service" means the service account is missing the `ai.translate.user` role.
-
-**Q: Hotkeys don't work**  
-A: Other applications may be intercepting hotkeys.
-
-## Build
-
-*Visual Studio 2022 and .NET 8 SDK are required.*
-
-1. Clone the repository (the **master** branch always corresponds to the latest release):
-
-    ```bash
-    git clone https://github.com/ramjke/Translumo.git
-    ```
-
-> Note: During the build, **binaries_extract.bat** will automatically download and extract models and Python binaries (~400 MB) to the target output directory.
-
-## Credits
-
-- [Material Design In XAML Toolkit](https://github.com/MaterialDesignInXAML/MaterialDesignInXamlToolkit)  
-- [OpenCvSharp](https://github.com/shimat/opencvsharp)  
-- [Python.NET](https://github.com/pythonnet/pythonnet)  
-- [EasyOCR](https://github.com/JaidedAI/EasyOCR)  
-- [Silero TTS](https://github.com/snakers4/silero-models)  
-
-## Alternative Solutions
-
-- [Lookupper](https://lookupper.com) — on-screen dictionary and translator for language learning.
-- [ScreTran](https://github.com/PavlikBender/ScreTran) — simple screen translator.
-- [ScreenTranslator](https://github.com/OneMoreGres/ScreenTranslator) - screen capture, OCR and translation tool.
-
+The upstream application retains [Apache-2.0](LICENSE). The separate comic detector
+component follows [dmMaze/comic-text-detector](https://github.com/dmMaze/comic-text-detector)
+and carries [GPL-3.0](local-ocr/LICENSE.comic-text-detector); retain that license and
+its corresponding source when distributing that component. The Japanese recognition
+model [manga-ocr-base](https://huggingface.co/kha-white/manga-ocr-base) is Apache-2.0.
+The translation model [HY-MT2](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF) is Apache-2.0.
+Translation model provenance and runtime details are in [local-model](local-model/README.md).
+Model setup retains the model cards and notices beside the downloaded weights.
