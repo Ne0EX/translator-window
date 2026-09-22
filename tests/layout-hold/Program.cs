@@ -64,6 +64,27 @@ internal static class Program
             try { await running; } catch (OperationCanceledException) { } catch (InvalidOperationException) { }
             overlay.Close();
         }
+
+        var fallbackOverlay = new SubtitleOverlay();
+        var fallbackStatuses = new List<string>();
+        using var fallbackCancellation = new CancellationTokenSource();
+        ScreenCapture.Marker = 5;
+        var fallbackSession = new LiveTranslationSession(new LocalTranslator(), fallbackOverlay, fallbackStatuses.Add);
+        var fallbackRun = fallbackSession.RunAsync(() => bounds, "ja", "th", SubtitleStyle.Overwrite, 6,
+            fallbackCancellation.Token, hideOriginals: true);
+        try
+        {
+            await Until(() => fallbackStatuses.Any(s => s.Contains("beside-text")), fallbackRun);
+            Require(((Canvas)fallbackOverlay.Content).Children.OfType<Border>().Any(b => b.Child is TextBlock t && t.Text == "Colored caption"),
+                "A textured overwrite failure must keep the translated caption visible beside the source.");
+            Console.WriteLine("PASS: textured overwrite falls back to beside-text captions.");
+        }
+        finally
+        {
+            fallbackCancellation.Cancel();
+            try { await fallbackRun; } catch (OperationCanceledException) { } catch (InvalidOperationException) { }
+            fallbackOverlay.Close();
+        }
     }
     static async Task Until(Func<bool> ready, Task running)
     {
@@ -85,14 +106,14 @@ namespace Translumo.Local
     {
         public Task<IReadOnlyList<string>> TranslateAsync(string[] texts, string source, string target, CancellationToken token)
             => Task.FromResult<IReadOnlyList<string>>(texts.Select(text => text switch {
-                "1" => "First translated caption", "2" => new string('W', 5000), "3" => "Recovered caption", _ => ""
+                "1" => "First translated caption", "2" => new string('W', 5000), "3" => "Recovered caption", "5" => "Colored caption", _ => ""
             }).ToArray());
     }
     public sealed class SpatialOcr : IDisposable
     {
         public Task<IReadOnlyList<TextRegion>> RecognizeAsync(Bitmap bitmap, string language, CancellationToken token)
             => Task.FromResult<IReadOnlyList<TextRegion>>(new[] {
-                new TextRegion(bitmap.GetPixel(0, 0).R.ToString(), new Rectangle(200, 100, 150, 60)) });
+                new TextRegion(bitmap.GetPixel(0, 0).R.ToString(), new Rectangle(200, 100, ScreenCapture.Marker == 5 ? 40 : 150, 60)) });
         public void Dispose() { }
     }
     public static class ScreenCapture
@@ -101,7 +122,13 @@ namespace Translumo.Local
         public static Bitmap Capture(Rectangle bounds)
         {
             var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
-            using (var drawing = Graphics.FromImage(bitmap)) drawing.Clear(Color.White);
+            using (var drawing = Graphics.FromImage(bitmap))
+            {
+                drawing.Clear(Marker == 5 ? Color.FromArgb(176, 32, 81) : Color.White);
+                if (Marker == 5)
+                    for (int x = 0; x < bounds.Width; x += 12)
+                        drawing.FillRectangle(Brushes.Black, x, 0, 6, bounds.Height);
+            }
             bitmap.SetPixel(0, 0, Color.FromArgb(Marker, 0, 0));
             return bitmap;
         }

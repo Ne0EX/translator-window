@@ -20,7 +20,10 @@ public enum SubtitleStyle { Overlay, Overwrite }
 
 public sealed class SubtitleLayoutException : InvalidOperationException
 {
-    public SubtitleLayoutException() : base("There is not enough space for readable subtitles. Select a smaller set of text or zoom the page out.") { }
+    public bool BackgroundRejected { get; }
+    public SubtitleLayoutException(bool backgroundRejected = false)
+        : base("There is not enough space for readable subtitles. Select a smaller set of text or zoom the page out.")
+        => BackgroundRejected = backgroundRejected;
 }
 
 public sealed class SubtitleOverlay : Window
@@ -108,6 +111,7 @@ public sealed class SubtitleOverlay : Window
                 .Concat(placed).ToArray();
             Border? caption = null;
             Drawing.Rectangle? position = null;
+            bool backgroundRejected = false;
             bool thai = translations[i].Any(character => character is >= '\u0e00' and <= '\u0e7f');
             var words = thai ? ThaiWords(translations[i]) : null;
             // Prefer natural horizontal lines; narrow vertical OCR boxes are not subtitle columns.
@@ -119,6 +123,7 @@ public sealed class SubtitleOverlay : Window
                     Foreground = Brushes.Black, TextWrapping = thai ? TextWrapping.NoWrap : TextWrapping.Wrap,
                     TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.None
                 };
+                Brush? captionBackground = backgroundPixels is null ? Brushes.White : null;
                 foreach (double widthDip in new[] { Math.Max(source.Width * scaleX, 140), 120d, 100d, 180d, 220d, 260d, 360d, 480d, Math.Max(source.Width * scaleX, 80) }.Distinct())
                 {
                     int width = Math.Min(monitor.Width, (int)Math.Ceiling(widthDip / scaleX));
@@ -128,13 +133,22 @@ public sealed class SubtitleOverlay : Window
                     text.Measure(new Size(contentWidth, double.PositiveInfinity));
                     int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
                     if (height > Math.Max(source.Height, 48 / scaleY) || height > width * 1.6) continue;
+                    if (backgroundPixels is not null && SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
+                        blockers, false, padding) is not null)
+                        backgroundRejected = true;
+                    if (backgroundPixels is not null)
+                        captionBackground = null;
                     position = SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
                         blockers, style == SubtitleStyle.Overlay, padding, backgroundPixels is null ? null
-                            : candidate => FitsWhiteBackground(candidate, source, captureBounds, backgroundPixels));
+                            : candidate => {
+                                captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels);
+                                return captionBackground is not null;
+                            });
                     if (position is null) continue;
 
+                    text.Foreground = ForegroundBrush(captionBackground!);
                     caption = new Border {
-                        Background = Brushes.White, Padding = new Thickness(insetX, insetY, insetX, insetY),
+                        Background = captionBackground ?? Brushes.White, Padding = new Thickness(insetX, insetY, insetX, insetY),
                         Child = text
                     };
                     break;
@@ -142,7 +156,7 @@ public sealed class SubtitleOverlay : Window
                 if (caption is not null) break;
             }
             if (caption is null || position is null)
-                throw new SubtitleLayoutException();
+                throw new SubtitleLayoutException(backgroundRejected);
             placed.Add(position.Value);
             visuals.Add((caption, position.Value));
         }
@@ -225,19 +239,40 @@ public sealed class SubtitleOverlay : Window
         return true;
     }
 
-    private static bool FitsWhiteBackground(Drawing.Rectangle caption, Drawing.Rectangle mask,
+    private static Brush? BackgroundBrush(Drawing.Rectangle caption, Drawing.Rectangle mask,
         Drawing.Rectangle capture, byte[] pixels)
     {
-        if (!capture.Contains(caption)) return false;
-        // ponytail: white speech bubbles; colored/art backgrounds need bubble segmentation and color-aware masks.
+        if (!capture.Contains(caption)) return null;
+        int samples = 0, minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
+        long totalR = 0, totalG = 0, totalB = 0;
         for (int y = caption.Top; y < caption.Bottom; y += 2)
             for (int x = caption.Left; x < caption.Right; x += 2)
             {
                 if (mask.Contains(x, y)) continue;
                 int offset = ((y - capture.Y) * capture.Width + x - capture.X) * 4;
-                if (pixels[offset] < 240 || pixels[offset + 1] < 240 || pixels[offset + 2] < 240) return false;
+                int b = pixels[offset], g = pixels[offset + 1], r = pixels[offset + 2];
+                minR = Math.Min(minR, r); minG = Math.Min(minG, g); minB = Math.Min(minB, b);
+                maxR = Math.Max(maxR, r); maxG = Math.Max(maxG, g); maxB = Math.Max(maxB, b);
+                totalR += r; totalG += g; totalB += b; samples++;
             }
-        return true;
+        if (samples == 0) return Brushes.White;
+        if (minR >= 240 && minG >= 240 && minB >= 240) return Brushes.White;
+        // ponytail: accept solid color bubbles; textured artwork still needs inpainting.
+        if (maxR - minR > 32 || maxG - minG > 32 || maxB - minB > 32) return null;
+        var brush = new SolidColorBrush(Color.FromRgb((byte)(totalR / samples), (byte)(totalG / samples), (byte)(totalB / samples)));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static Brush ForegroundBrush(Brush background)
+    {
+        if (background is SolidColorBrush solid)
+        {
+            var color = solid.Color;
+            double luminance = (0.299 * color.R) + (0.587 * color.G) + (0.114 * color.B);
+            if (luminance < 145) return Brushes.White;
+        }
+        return Brushes.Black;
     }
     public void Preparing(Drawing.Rectangle captureBounds)
     {
@@ -335,8 +370,3 @@ public sealed class SubtitleOverlay : Window
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetWindowDisplayAffinity(nint hwnd, out uint affinity);
 }
-
-
-
-
-

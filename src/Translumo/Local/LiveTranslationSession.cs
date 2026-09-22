@@ -77,6 +77,20 @@ public sealed class LiveTranslationSession
                                 var unreadable = result.UnreadableCount > 0 ? $" \u00b7 {result.UnreadableCount} unreadable blocks; try zooming in" : "";
                                 _status($"{result.Regions.Count - result.UnreadableCount} translated blocks \u00b7 {result.ElapsedMs:N0} ms \u00b7 local model{unreadable}");
                             }
+                            catch (SubtitleLayoutException error) when (error.BackgroundRejected
+                                && style == SubtitleStyle.Overwrite && hideOriginals)
+                            {
+                                try
+                                {
+                                    _overlay.Render(result.Bounds, result.Regions, result.Translations,
+                                        SubtitleStyle.Overlay, padding);
+                                    _status("Overwrite could not safely cover this artwork; showing beside-text subtitles while watching for changes.");
+                                }
+                                catch (SubtitleLayoutException)
+                                {
+                                    _status(error.Message + " The previous view stays covered while watching for changes.");
+                                }
+                            }
                             catch (SubtitleLayoutException error)
                             {
                                 _status(error.Message + (hideOriginals ? " The previous view stays covered while watching for changes." : " Watching for changes."));

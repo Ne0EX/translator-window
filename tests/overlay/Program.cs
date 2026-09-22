@@ -84,6 +84,8 @@ internal static class Program
         Console.WriteLine("Subtitle geometry checks passed.");
         if (!args.Contains("--visual")) return;
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        CheckColoredOverwrite();
+        CheckTexturedOverwriteRejects();
         var screen = Forms.Screen.PrimaryScreen!.Bounds;
         var capture = new Drawing.Rectangle(screen.Left + 80, screen.Top + 60, 720, Math.Min(800, screen.Height - 100));
         var regions = new[] {
@@ -220,6 +222,70 @@ internal static class Program
         finally { overlay.Close(); page.Close(); app.Shutdown(); }
     }
 
+    private static void CheckColoredOverwrite()
+    {
+        const int width = 600, height = 300;
+        var pixels = new byte[width * height * 4];
+        for (int offset = 0; offset < pixels.Length; offset += 4)
+        {
+            pixels[offset] = 81;
+            pixels[offset + 1] = 32;
+            pixels[offset + 2] = 176;
+            pixels[offset + 3] = 255;
+        }
+        var frame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+        frame.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+        frame.Freeze();
+        var overlay = new SubtitleOverlay();
+        try
+        {
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                new[] { new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)) },
+                new[] { "นี่คือคำแปล" }, SubtitleStyle.Overwrite, 6, frame);
+            overlay.UpdateLayout();
+            Require(((Canvas)overlay.Content).Children.OfType<Border>().Any(b => b.Child is TextBlock),
+                "Overwrite must render a caption over a colored manga page.");
+        }
+        finally { overlay.Close(); }
+        Console.WriteLine("Colored manga overwrite rendering passed.");
+    }
+
+    private static void CheckTexturedOverwriteRejects()
+    {
+        const int width = 600, height = 300;
+        var pixels = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                int offset = (y * width + x) * 4;
+                bool stripe = x % 12 < 6;
+                pixels[offset] = stripe ? (byte)81 : (byte)0;
+                pixels[offset + 1] = stripe ? (byte)32 : (byte)0;
+                pixels[offset + 2] = stripe ? (byte)176 : (byte)0;
+                pixels[offset + 3] = 255;
+            }
+        var frame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+        frame.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+        frame.Freeze();
+        var overlay = new SubtitleOverlay();
+        try
+        {
+            try
+            {
+                overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                    new[] { new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)) },
+                    new[] { "นี่คือคำแปล" }, SubtitleStyle.Overwrite, 6, frame);
+                throw new InvalidOperationException("Textured artwork should not be covered by an opaque overwrite caption.");
+            }
+            catch (SubtitleLayoutException error)
+            {
+                Require(error.BackgroundRejected, "Textured overwrite failures must identify the background constraint.");
+            }
+        }
+        finally { overlay.Close(); }
+        Console.WriteLine("Textured manga overwrite remains protected.");
+    }
+
     private static void Pump(Application app)
     {
         app.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
@@ -273,6 +339,4 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool SetWindowDisplayAffinity(nint hwnd, uint affinity);
     [DllImport("user32.dll")] private static extern bool GetWindowDisplayAffinity(nint hwnd, out uint affinity);
 }
-
-
 
