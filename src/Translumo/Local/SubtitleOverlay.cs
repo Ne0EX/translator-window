@@ -167,6 +167,7 @@ public sealed class SubtitleOverlay : Window
         }
         var placed = new List<Drawing.Rectangle>();
         var visuals = new List<(Border Border, Drawing.Rectangle Bounds)>();
+        var marginIndices = new List<int>();
 
         if (style == SubtitleStyle.Overwrite)
             for (int i = 0; i < masks.Length; i++)
@@ -186,13 +187,15 @@ public sealed class SubtitleOverlay : Window
             Border? caption = null;
             Drawing.Rectangle? position = null;
             bool backgroundRejected = false;
-            bool thai = translations[i].Any(character => character is >= '\u0e00' and <= '\u0e7f');
-            var words = thai ? ThaiWords(translations[i]) : null;
+            string translation = japaneseToThai && style == SubtitleStyle.Overwrite
+                ? SafeThaiTranslation(translations[i]) : translations[i];
+            bool thai = translation.Any(character => character is >= '\u0e00' and <= '\u0e7f');
+            var words = thai ? ThaiWords(translation) : null;
             // Keep captions tied to the recognized textbox; grow only enough to fit its translation.
             foreach (double fontSize in CaptionFontSizes(source.Height, scaleY))
             {
                 var text = new TextBlock {
-                    Text = translations[i], FontFamily = new FontFamily(thai ? "Leelawadee UI" : "Segoe UI"), FontSize = fontSize,
+                    Text = translation, FontFamily = new FontFamily(thai ? "Leelawadee UI" : "Segoe UI"), FontSize = fontSize,
                     Language = XmlLanguage.GetLanguage(thai ? "th-TH" : "en-US"),
                     Foreground = Brushes.Black, TextWrapping = thai ? TextWrapping.NoWrap : TextWrapping.Wrap,
                     TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.None
@@ -237,13 +240,20 @@ public sealed class SubtitleOverlay : Window
             }
             if (caption is null || position is null)
             {
-                if (japaneseToThai && style == SubtitleStyle.Overwrite && frame is not null
-                    && TryRenderThaiMargin(captureBounds, masks, sources, translations, backgroundPixels!, desktop, scaleX, scaleY, padding))
-                    return;
+                if (japaneseToThai && style == SubtitleStyle.Overwrite && frame is not null)
+                { marginIndices.Add(i); continue; }
                 throw new SubtitleLayoutException(backgroundRejected);
             }
             placed.Add(position.Value);
             visuals.Add((caption, position.Value));
+        }
+
+        if (marginIndices.Count > 0)
+        {
+            if (!TryRenderThaiMargin(captureBounds, masks, sources, translations, marginIndices,
+                    backgroundPixels!, desktop, scaleX, scaleY, padding, visuals))
+                throw new SubtitleLayoutException();
+            return;
         }
 
         // Commit only after every caption fits; failed layout keeps the last translated page visible.
@@ -260,17 +270,19 @@ public sealed class SubtitleOverlay : Window
     }
 
     private bool TryRenderThaiMargin(Drawing.Rectangle capture, Drawing.Rectangle[] masks,
-        Drawing.Rectangle[] sources, IReadOnlyList<string> translations, byte[] pixels, Drawing.Rectangle desktop,
-        double scaleX, double scaleY, int padding)
+        Drawing.Rectangle[] sources, IReadOnlyList<string> translations, IReadOnlyList<int> overflow, byte[] pixels, Drawing.Rectangle desktop,
+        double scaleX, double scaleY, int padding, List<(Border Border, Drawing.Rectangle Bounds)> visuals)
     {
         var margins = SubtitleLayout.FindPlainMargins(capture, masks, pixels);
         if (margins.Length == 0) return false;
         var marginBackgrounds = margins.Select(margin => BackgroundBrush(margin, Drawing.Rectangle.Empty,
             capture, pixels, null, SubtitleStyle.Overwrite) ?? Brushes.White).ToArray();
         var placed = new List<(Border Border, Drawing.Rectangle Bounds)>();
-        var readingOrder = Enumerable.Range(0, translations.Count)
+        var readingOrder = overflow
             .OrderByDescending(i => sources[i].Left + sources[i].Width / 2)
             .ThenBy(i => sources[i].Top).ToArray();
+        var numbers = readingOrder.Select((sourceIndex, rank) => (sourceIndex, number: rank + 1))
+            .ToDictionary(pair => pair.sourceIndex, pair => pair.number);
         foreach (double fontSize in new[] { 12d, 11d, 10d, 9d, 8d })
         foreach (int firstColumnCount in margins.Length == 1
                      ? new[] { readingOrder.Length }
@@ -286,7 +298,7 @@ public sealed class SubtitleOverlay : Window
                 int i = readingOrder[orderIndex];
                 int column = orderIndex < firstColumnCount ? 0 : 1;
                 var margin = margins[column];
-                string translation = SafeThaiTranslation(translations[i]);
+                string translation = $"{numbers[i]}. {SafeThaiTranslation(translations[i])}";
                 var text = new TextBlock {
                     Text = translation, FontFamily = new FontFamily("Leelawadee UI"), FontSize = fontSize,
                     Language = XmlLanguage.GetLanguage("th-TH"), Foreground = Brushes.Black,
@@ -305,13 +317,17 @@ public sealed class SubtitleOverlay : Window
                 tops[column] += height + 1;
             }
             if (!fits) continue;
+            visuals.AddRange(placed);
+            foreach (int i in readingOrder)
+            {
+                var sourceMask = masks[i];
+                var badge = Badge(numbers[i], i);
+                visuals.Add((badge, new Drawing.Rectangle(sourceMask.Left, sourceMask.Top,
+                    Math.Min(sourceMask.Width, 24), Math.Min(sourceMask.Height, 24))));
+            }
             rollbackChildren ??= canvas.Children.Cast<UIElement>().ToArray();
             canvas.Children.Clear();
-            for (int i = 0; i < masks.Length; i++)
-                if (masks[i].Width > 0 && masks[i].Height > 0)
-                    canvas.Children.Add(Positioned(new Border { Tag = i,
-                        Background = MaskBrush(masks[i], capture, pixels) }, masks[i]));
-            foreach (var (border, bounds) in placed) canvas.Children.Add(Positioned(border, bounds));
+            foreach (var (border, bounds) in visuals) canvas.Children.Add(Positioned(border, bounds));
             return true;
         }
         return false;
@@ -324,6 +340,16 @@ public sealed class SubtitleOverlay : Window
             Canvas.SetTop(border, (bounds.Y - desktop.Y) * scaleY);
             return border;
         }
+    }
+
+    private static Border Badge(int number, int sourceIndex)
+    {
+        var text = new TextBlock { Text = number.ToString(CultureInfo.InvariantCulture), FontSize = 11,
+            FontWeight = FontWeights.Bold, Foreground = Brushes.White, TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center };
+        return new Border { Tag = sourceIndex, Uid = "association-badge",
+            Background = new SolidColorBrush(Color.FromRgb(35, 75, 120)), CornerRadius = new CornerRadius(8),
+            Child = text, IsHitTestVisible = false };
     }
 
     private static string SafeThaiTranslation(string value)

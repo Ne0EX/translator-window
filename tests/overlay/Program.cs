@@ -349,22 +349,36 @@ internal static class Program
                 "Provisional overwrite must cover every detected source before translation finishes.");
             overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
             Pump(Application.Current);
-            var captions = ((Canvas)overlay.Content).Children.OfType<Border>().Where(border => border.Child is TextBlock).ToArray();
+            var allBorders = ((Canvas)overlay.Content).Children.OfType<Border>().ToArray();
+            var captions = allBorders.Where(border => border.Tag is int && border.Uid != "association-badge"
+                && border.Child is TextBlock).ToArray();
             Require(captions.Length == translations.Count, "Dense fallback must preserve every Thai translation.");
             double deviceScale = PresentationSource.FromVisual(overlay)!.CompositionTarget!.TransformFromDevice.M11;
-            var marginXs = captions.Select(border => Math.Round(Canvas.GetLeft(border), 1)).Distinct().ToArray();
+            var badges = allBorders.Where(border => border.Uid == "association-badge").ToArray();
+            var overflowTags = badges.Select(badge => (int)badge.Tag).ToHashSet();
+            var overflowCaptions = captions.Where(border => overflowTags.Contains((int)border.Tag)).ToArray();
+            var marginXs = overflowCaptions.Select(border => Math.Round(Canvas.GetLeft(border), 1)).Distinct().ToArray();
             var localMarginXs = marginXs.Select(x => x / deviceScale + Forms.SystemInformation.VirtualScreen.Left - capture.Left).ToArray();
-            Require(localMarginXs.Length is 1 or 2 && localMarginXs.All(x => x < 280 || x >= 720),
-                "Dense fallback captions must stay in one or two plain side margins, outside manga artwork.");
+            var inPage = captions.Single(border => (int)border.Tag == 0);
+            double inPageX = Canvas.GetLeft(inPage) / deviceScale + Forms.SystemInformation.VirtualScreen.Left - capture.Left;
+            Require(inPageX >= 280 && inPageX < 720 && badges.Length > 0 && badges.Length < translations.Count
+                && overflowCaptions.All(border => {
+                    double x = Canvas.GetLeft(border) / deviceScale + Forms.SystemInformation.VirtualScreen.Left - capture.Left;
+                    return x < 280 || x >= 720;
+                }), "Short Thai translations must stay on the page while only overflow uses plain margins.");
             if (marginXs.Length == 2)
                 Require(localMarginXs[0] >= 720 && localMarginXs[1] < 280,
                     "Reading order must continue from the right margin into the left margin.");
             Require(captions.All(border => ((TextBlock)border.Child).FontSize >= 12)
-                && captions[0].Background is SolidColorBrush marginColor && marginColor.Color.R == 112,
+                && overflowCaptions[0].Background is SolidColorBrush marginColor && marginColor.Color.R == 112,
                 "Every realistic Thai block must fit at 12 DIP or larger on the sampled gray margins.");
             Require(captions.Select(border => (TextBlock)border.Child).All(text => text.Text.All(character =>
                 character is not (>= '\u3040' and <= '\u30ff') and not (>= '\u3400' and <= '\u9fff'))),
                 "Mixed model output must not expose Japanese in the fallback margin.");
+            Require(badges.Length == overflowCaptions.Length && badges.All(badge => overflowCaptions.Any(caption =>
+                Equals(caption.Tag, badge.Tag) && ((TextBlock)caption.Child).Text.StartsWith(
+                    ((TextBlock)badge.Child).Text + ". ", StringComparison.Ordinal))),
+                "Each overflow source mask must have a number matching its margin caption.");
             var desktop = Forms.SystemInformation.VirtualScreen;
             var transform = PresentationSource.FromVisual(overlay)!.CompositionTarget!.TransformFromDevice;
             var overlayBitmap = new RenderTargetBitmap(desktop.Width, desktop.Height,
@@ -392,6 +406,26 @@ internal static class Program
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(preview));
             encoder.Save(stream);
+            overlay.ShiftVertical(24, Enumerable.Range(1, regions.Count - 1).ToArray());
+            var scrolledBorders = ((Canvas)overlay.Content).Children.OfType<Border>().ToArray();
+            Require(scrolledBorders.Count(border => border.Uid == "association-badge") == badges.Length
+                && scrolledBorders.Where(border => border.Uid == "association-badge").All(badge => scrolledBorders.Any(caption =>
+                    Equals(caption.Tag, badge.Tag) && caption.Uid != "association-badge"
+                    && caption.Child is TextBlock text && text.Text.StartsWith(
+                        ((TextBlock)badge.Child).Text + ". ", StringComparison.Ordinal))),
+                "Source numbers must remain paired with margin captions while the page scrolls.");
+            var narrowRegions = regions.Select(region => region with {
+                Bounds = new Drawing.Rectangle(region.Bounds.X, region.Bounds.Y, region.Bounds.Width, 10)
+            }).ToArray();
+            overlay.Render(capture, narrowRegions, translations, SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
+            var allMargin = ((Canvas)overlay.Content).Children.OfType<Border>().ToArray();
+            var allMarginCaptions = allMargin.Where(border => border.Tag is int && border.Uid != "association-badge"
+                && border.Child is TextBlock).ToArray();
+            Require(allMarginCaptions.Length == translations.Count && allMarginCaptions.All(border => {
+                    double x = Canvas.GetLeft(border) / deviceScale + Forms.SystemInformation.VirtualScreen.Left - capture.Left;
+                    return x < 280 || x >= 720;
+                }) && allMargin.Count(border => border.Uid == "association-badge") == translations.Count,
+                "A dense page with no in-place fits must keep every translation in the margins.");
             Console.WriteLine("Dense Thai side-margin fallback passed: .cache/diagnostics/dense-margin-fallback.png");
         }
         finally { overlay.Close(); fixture.Close(); }
@@ -462,7 +496,8 @@ internal static class Program
     {
         int count = 0;
         for (int offset = 0; offset < pixels.Length; offset += 4)
-            if (pixels[offset + 1] > 80 && pixels[offset + 1] > pixels[offset + 2] * 1.4) count++;
+            if (pixels[offset + 1] > 80 && pixels[offset + 1] > pixels[offset + 2] * 1.4
+                && pixels[offset + 1] > pixels[offset] * 1.4) count++;
         return count;
     }
     private static void Require(bool condition, string message)
