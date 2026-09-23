@@ -24,13 +24,8 @@ class Detector:
         options.intra_op_num_threads = 4
         options.inter_op_num_threads = 1
         self.model_path, self.options = str(model), options
-        providers = ["CPUExecutionProvider"]
-        if os.environ.get("LOCAL_OCR_DEVICE", "auto") != "cpu" and "CUDAExecutionProvider" in ort.get_available_providers():
-            import torch  # Load the CUDA/cuDNN DLLs bundled with the installed torch wheel.
-            if torch.cuda.is_available():
-                providers.insert(0, ("CUDAExecutionProvider", {"cudnn_conv_algo_search": "HEURISTIC",
-                                  "gpu_mem_limit": 2147483648, "arena_extend_strategy": "kSameAsRequested"}))
-        self.session = ort.InferenceSession(self.model_path, options, providers=providers)
+        self.session = create_session(ort, self.model_path, options,
+                                      os.environ.get("LOCAL_OCR_DETECTOR_DEVICE", "cpu"))
         self.input_name = self.session.get_inputs()[0].name
 
     def detect(self, image):
@@ -62,6 +57,22 @@ class Detector:
                 regions.append({"x": left, "y": top, "width": right - left, "height": bottom - top,
                                 "vertical": bool(box_height > box_width * 0.8)})
         return regions
+
+
+def create_session(runtime, model, options, device):
+    providers = ["CPUExecutionProvider"]
+    if device == "cuda" and "CUDAExecutionProvider" in runtime.get_available_providers():
+        import torch  # Load the CUDA/cuDNN DLLs bundled with the installed torch wheel.
+        if torch.cuda.is_available():
+            providers.insert(0, ("CUDAExecutionProvider", {"cudnn_conv_algo_search": "HEURISTIC",
+                              "gpu_mem_limit": 2147483648, "arena_extend_strategy": "kSameAsRequested"}))
+    try:
+        return runtime.InferenceSession(model, options, providers=providers)
+    except Exception:
+        if providers == ["CPUExecutionProvider"]:
+            raise
+        print("CUDA detector unavailable; continuing with local CPU inference.", file=sys.stderr, flush=True)
+        return runtime.InferenceSession(model, options, providers=["CPUExecutionProvider"])
 
 
 def select_text_boxes(predictions):

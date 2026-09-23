@@ -42,8 +42,10 @@ codes are `ko`, `en`, and `th`; recognition for these stays in the Windows app.
 Run `powershell -File local-ocr/setup.ps1 -Cuda` for the tested NVIDIA configuration.
 It installs PyTorch 2.6.0+cu126 and ONNX Runtime GPU 1.23.2, replacing CPU ONNX Runtime.
 The default setup uses CPU inference and preserves an already-installed GPU runtime.
-Set `LOCAL_OCR_DEVICE=cpu` to force CPU. Automatic GPU inference falls back to CPU
-if CUDA is unavailable or inference fails. The worker uses no cloud inference,
+Comic detection uses CPU by default to leave GPU memory for translation and manga
+recognition. Set `LOCAL_OCR_DETECTOR_DEVICE=cuda` to opt the detector into CUDA;
+session creation and inference fall back to CPU if CUDA fails. `LOCAL_OCR_DEVICE`
+continues to control manga recognition. The worker uses no cloud inference,
 disables ONNX telemetry, and loads transformer assets with `local_files_only=True`.
 
 On the author-authorized Black Jack page 12 fixture, this changed recognition from
