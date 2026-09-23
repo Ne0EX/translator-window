@@ -64,6 +64,7 @@ if (!ScrollAlignment.TryEstimateVerticalShift(sparsePrevious, sparseCurrent, out
 
 using var largePrevious = new Bitmap(3840, 2160, PixelFormat.Format32bppArgb);
 using var largeCurrent = new Bitmap(3840, 2160, PixelFormat.Format32bppArgb);
+const int largeOffset = 300;
 var noise = new byte[largePrevious.Width * largePrevious.Height * 4];
 new Random(29).NextBytes(noise);
 for (int i = 3; i < noise.Length; i += 4) noise[i] = 255;
@@ -72,13 +73,13 @@ try { Marshal.Copy(noise, 0, largeData.Scan0, noise.Length); }
 finally { largePrevious.UnlockBits(largeData); }
 var shiftedNoise = new byte[noise.Length];
 int largeRow = largePrevious.Width * 4;
-for (int y = 0; y < largePrevious.Height - offset; y++)
-    Array.Copy(noise, y * largeRow, shiftedNoise, (y + offset) * largeRow, largeRow);
+for (int y = 0; y < largePrevious.Height - largeOffset; y++)
+    Array.Copy(noise, y * largeRow, shiftedNoise, (y + largeOffset) * largeRow, largeRow);
 var shiftedData = largeCurrent.LockBits(new Rectangle(0, 0, largeCurrent.Width, largeCurrent.Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
 try { Marshal.Copy(shiftedNoise, 0, shiftedData.Scan0, shiftedNoise.Length); }
 finally { largeCurrent.UnlockBits(shiftedData); }
 var timer = Stopwatch.StartNew();
-if (!ScrollAlignment.TryEstimateVerticalShift(largePrevious, largeCurrent, out int largeShift) || largeShift != offset)
+if (!ScrollAlignment.TryEstimateVerticalShift(largePrevious, largeCurrent, out int largeShift) || largeShift != largeOffset)
     throw new InvalidOperationException($"4K page scroll was not verified (shift {largeShift}).");
 timer.Stop();
 Console.WriteLine($"4K shift estimator: {timer.ElapsedMilliseconds} ms.");

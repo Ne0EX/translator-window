@@ -79,10 +79,12 @@ internal static class ScrollAlignment
                 }
                 else if (score > runnerUpScore) runnerUpScore = score;
             }
-            for (int dy = -180; dy <= 180; dy += 4)
+            // ponytail: a half-screen jump uses normal OCR; this covers one high-DPI wheel step.
+            int maxShift = Math.Min(360, previous.Height / 2);
+            for (int dy = -maxShift; dy <= maxShift; dy += 4)
                 if (Math.Abs(dy) >= 4) Consider(dy);
             int coarseBest = best;
-            for (int dy = Math.Max(-180, coarseBest - 3); dy <= Math.Min(180, coarseBest + 3); dy++)
+            for (int dy = Math.Max(-maxShift, coarseBest - 3); dy <= Math.Min(maxShift, coarseBest + 3); dy++)
                 if (Math.Abs(dy) >= 4 && dy % 4 != 0) Consider(dy);
             if (bestScore < 0.9 || bestScore - runnerUpScore < 0.08)
                 return false;
