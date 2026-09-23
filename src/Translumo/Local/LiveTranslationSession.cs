@@ -170,7 +170,8 @@ public sealed class LiveTranslationSession
                             try
                             {
                                 var layoutTimer = Stopwatch.StartNew();
-                                _overlay.Render(result.Bounds, result.Regions, result.Translations, style, padding, result.Frame);
+                                _overlay.Render(result.Bounds, result.Regions, result.Translations, style, padding,
+                                    result.Frame, source.Split('-', 2)[0] == "ja" && target == "th");
                                 layoutTimer.Stop();
                                 _overlay.ConfirmRender();
                                 stableRegions = result.RegionFingerprints;
@@ -184,12 +185,11 @@ public sealed class LiveTranslationSession
                             catch (SubtitleLayoutException error) when (error.BackgroundRejected
                                 && style == SubtitleStyle.Overwrite && hideOriginals)
                             {
-                                _overlay.Clear();
                                 _status(error.Message + " Waiting for a readable frame.");
                             }
                             catch (SubtitleLayoutException error)
                             {
-                                _overlay.Clear();
+                                if (!(style == SubtitleStyle.Overwrite && hideOriginals)) _overlay.Clear();
                                 _status(error.Message + " Watching for changes.");
                             }
                         }
@@ -210,6 +210,7 @@ public sealed class LiveTranslationSession
                         lastScanHash = hash;
                         pending = TranslateFrameAsync((Bitmap)bitmap.Clone(), bounds.Value, _version,
                             source, target, style, padding, pendingCancellation.Token, hideOriginals,
+                            stableTranslation is null,
                             captureTimer.ElapsedMilliseconds, hash, lastScanStarted, frame => recognizedFrame = frame);
                     }
                 }
@@ -241,7 +242,8 @@ public sealed class LiveTranslationSession
 
     private async Task<TranslatedFrame?> TranslateFrameAsync(Bitmap bitmap, Rectangle bounds, int version,
         string source, string target, SubtitleStyle style, int padding, CancellationToken token,
-        bool hideOriginals, long captureMs, byte[] frameHash, long scanStarted, Action<TranslatedFrame> recognized)
+        bool hideOriginals, bool renderProvisionalMasks, long captureMs, byte[] frameHash, long scanStarted,
+        Action<TranslatedFrame> recognized)
     {
         using (bitmap)
         {
@@ -266,9 +268,14 @@ public sealed class LiveTranslationSession
                     0, null, 0, FingerprintRegions(bitmap, regions), frameHash, scanStarted);
             }
             BitmapSource? frame = Snapshot(bitmap);
-            if (style == SubtitleStyle.Overwrite || style == SubtitleStyle.Overlay)
+            if (renderProvisionalMasks && (style == SubtitleStyle.Overwrite || style == SubtitleStyle.Overlay))
             {
-                try { _overlay.Render(bounds, regions, regions.Select(_ => "\u2026").ToArray(), style, padding, frame); }
+                try
+                {
+                    if (style == SubtitleStyle.Overwrite && hideOriginals)
+                        _overlay.RenderMasks(bounds, regions, padding, frame);
+                    else _overlay.Render(bounds, regions, regions.Select(_ => "\u2026").ToArray(), style, padding, frame);
+                }
                 catch (SubtitleLayoutException) { /* Continue translating; the final caption may fit differently. */ }
             }
             recognized(new(version, bounds, regions, regions.Select(_ => "\u2026").ToArray(), captureMs,

@@ -7,6 +7,57 @@ namespace Translumo.Local;
 
 internal static class SubtitleLayout
 {
+    internal static Rectangle? FindPlainMargin(Rectangle capture, IReadOnlyList<Rectangle> masks, byte[] pixels)
+    {
+        if (pixels.Length != (long)capture.Width * capture.Height * 4) return null;
+        int widest = Math.Min(360, capture.Width / 3);
+        for (int width = widest / 20 * 20; width >= 120; width -= 20)
+        {
+            Rectangle? best = null;
+            foreach (int left in new[] { capture.Right - width, capture.Left })
+            {
+                int runTop = -1;
+                for (int y = capture.Top; y <= capture.Bottom; y += 4)
+                {
+                    var row = new Rectangle(left, y, width, Math.Min(4, capture.Bottom - y));
+                    bool plain = row.Height > 0 && !masks.Any(mask => mask.IntersectsWith(row));
+                    int minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
+                    if (plain)
+                    {
+                        int sampleY = y + row.Height / 2;
+                        for (int x = left; x < left + width; x += Math.Max(1, width / 16))
+                        {
+                            int offset = ((sampleY - capture.Top) * capture.Width + x - capture.Left) * 4;
+                            int b = pixels[offset], g = pixels[offset + 1], r = pixels[offset + 2];
+                            minR = Math.Min(minR, r); minG = Math.Min(minG, g); minB = Math.Min(minB, b);
+                            maxR = Math.Max(maxR, r); maxG = Math.Max(maxG, g); maxB = Math.Max(maxB, b);
+                        }
+                        plain = maxR - minR <= 20 && maxG - minG <= 20 && maxB - minB <= 20
+                            && minR >= 35 && minG >= 35 && minB >= 35 && maxR <= 245 && maxG <= 245 && maxB <= 245;
+                    }
+                    if (plain) runTop = runTop < 0 ? y : runTop;
+                    else if (runTop >= 0)
+                    {
+                        if (y - runTop >= 400 && (best is null || y - runTop > best.Value.Height))
+                            best = new Rectangle(left, runTop, width, y - runTop);
+                        runTop = -1;
+                    }
+                }
+            }
+            if (best.HasValue) return best;
+        }
+        return null;
+    }
+
+    internal static Rectangle[] FindPlainMargins(Rectangle capture, IReadOnlyList<Rectangle> masks, byte[] pixels)
+    {
+        var first = FindPlainMargin(capture, masks, pixels);
+        if (first is null) return Array.Empty<Rectangle>();
+        var blockers = masks.Append(first.Value).ToArray();
+        var second = FindPlainMargin(capture, blockers, pixels);
+        return second is null ? new[] { first.Value } : new[] { first.Value, second.Value };
+    }
+
     internal static Rectangle? Place(Rectangle source, Size size, Rectangle screen,
         IReadOnlyList<Rectangle> blockers, bool beside, int gap, Func<Rectangle, bool>? accepts = null)
     {
@@ -72,6 +123,26 @@ internal static class SubtitleLayout
         var edgeCaption = Place(edge, new Size(200, 80), monitor, Array.Empty<Rectangle>(), true, 6);
         Require(edgeCaption.HasValue && monitor.Contains(edgeCaption.Value) && !edgeCaption.Value.IntersectsWith(edge),
             "Captions at monitor edges must use available space on the other side.");
+
+        var page = new Rectangle(0, 0, 600, 400);
+        var pixels = new byte[600 * 400 * 4];
+        for (int y = 0; y < 400; y++)
+            for (int x = 0; x < 600; x++)
+            {
+                int offset = (y * 600 + x) * 4;
+                byte gray = (byte)(x < 130 || x >= 470 ? 120 : 220);
+                pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = gray;
+                pixels[offset + 3] = 255;
+            }
+        var plainMargin = FindPlainMargin(page, new[] { new Rectangle(150, 40, 200, 100) }, pixels);
+        Require(plainMargin.HasValue && (plainMargin.Value.Right <= 130 || plainMargin.Value.Left >= 470),
+            "Dense pages may fall back only into a clear, uniform side margin.");
+        var margins = FindPlainMargins(page, new[] { new Rectangle(150, 40, 200, 100) }, pixels);
+        Require(margins.Length == 2 && margins.Any(margin => margin.Right <= 130)
+            && margins.Any(margin => margin.Left >= 470),
+            "When one gutter is not enough, the fallback may use both clear page margins.");
+        Require(FindPlainMargin(page, new[] { new Rectangle(0, 0, 600, 400) }, pixels) is null,
+            "A covered margin must not trigger the side-margin fallback.");
 
         static void Require(bool condition, string message)
         {

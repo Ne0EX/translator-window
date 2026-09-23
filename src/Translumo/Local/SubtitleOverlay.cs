@@ -60,6 +60,41 @@ public sealed class SubtitleOverlay : Window
 
     internal void ConfirmRender() => rollbackChildren = null;
 
+    internal void RenderMasks(Drawing.Rectangle captureBounds, IReadOnlyList<TextRegion> regions,
+        int padding, BitmapSource? frame)
+    {
+        Dispatcher.VerifyAccess();
+        var (desktop, scaleX, scaleY) = PrepareWindow();
+        byte[]? pixels = null;
+        if (frame is not null)
+        {
+            var background = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+            pixels = new byte[checked(frame.PixelWidth * frame.PixelHeight * 4)];
+            background.CopyPixels(pixels, frame.PixelWidth * 4, 0);
+        }
+        var masks = regions.Select(region => {
+            var bounds = Drawing.Rectangle.Intersect(region.Bounds,
+                new Drawing.Rectangle(0, 0, captureBounds.Width, captureBounds.Height));
+            bounds.Offset(captureBounds.Location);
+            if (bounds.Width <= 0 || bounds.Height <= 0) return Drawing.Rectangle.Empty;
+            bounds.Inflate(padding, padding);
+            return Drawing.Rectangle.Intersect(bounds, desktop);
+        }).ToArray();
+        rollbackChildren ??= canvas.Children.Cast<UIElement>().ToArray();
+        canvas.Children.Clear();
+        for (int i = 0; i < masks.Length; i++)
+        {
+            var mask = masks[i];
+            if (mask.Width <= 0 || mask.Height <= 0) continue;
+            var border = new Border { Tag = i, Background = MaskBrush(mask, captureBounds, pixels),
+                Width = mask.Width * scaleX, Height = mask.Height * scaleY };
+            Canvas.SetLeft(border, (mask.X - desktop.X) * scaleX);
+            Canvas.SetTop(border, (mask.Y - desktop.Y) * scaleY);
+            canvas.Children.Add(border);
+        }
+        rollbackChildren = null;
+    }
+
     internal void ShiftVertical(int pixels, IReadOnlyList<int>? retainedIndices = null)
     {
         Dispatcher.VerifyAccess();
@@ -94,7 +129,8 @@ public sealed class SubtitleOverlay : Window
     }
 
     public void Render(Drawing.Rectangle captureBounds, IReadOnlyList<TextRegion> regions,
-        IReadOnlyList<string> translations, SubtitleStyle style, int padding = 6, BitmapSource? frame = null)
+        IReadOnlyList<string> translations, SubtitleStyle style, int padding = 6, BitmapSource? frame = null,
+        bool japaneseToThai = false)
     {
         Dispatcher.VerifyAccess();
         ArgumentNullException.ThrowIfNull(regions);
@@ -200,7 +236,12 @@ public sealed class SubtitleOverlay : Window
                 if (caption is not null) break;
             }
             if (caption is null || position is null)
+            {
+                if (japaneseToThai && style == SubtitleStyle.Overwrite && frame is not null
+                    && TryRenderThaiMargin(captureBounds, masks, sources, translations, backgroundPixels!, desktop, scaleX, scaleY, padding))
+                    return;
                 throw new SubtitleLayoutException(backgroundRejected);
+            }
             placed.Add(position.Value);
             visuals.Add((caption, position.Value));
         }
@@ -216,6 +257,80 @@ public sealed class SubtitleOverlay : Window
             Canvas.SetTop(border, (bounds.Y - desktop.Y) * scaleY);
             canvas.Children.Add(border);
         }
+    }
+
+    private bool TryRenderThaiMargin(Drawing.Rectangle capture, Drawing.Rectangle[] masks,
+        Drawing.Rectangle[] sources, IReadOnlyList<string> translations, byte[] pixels, Drawing.Rectangle desktop,
+        double scaleX, double scaleY, int padding)
+    {
+        var margins = SubtitleLayout.FindPlainMargins(capture, masks, pixels);
+        if (margins.Length == 0) return false;
+        var marginBackgrounds = margins.Select(margin => BackgroundBrush(margin, Drawing.Rectangle.Empty,
+            capture, pixels, null, SubtitleStyle.Overwrite) ?? Brushes.White).ToArray();
+        var placed = new List<(Border Border, Drawing.Rectangle Bounds)>();
+        var readingOrder = Enumerable.Range(0, translations.Count)
+            .OrderByDescending(i => sources[i].Left + sources[i].Width / 2)
+            .ThenBy(i => sources[i].Top).ToArray();
+        foreach (double fontSize in new[] { 12d, 11d, 10d, 9d, 8d })
+        foreach (int firstColumnCount in margins.Length == 1
+                     ? new[] { readingOrder.Length }
+                     : fontSize >= 12
+                         ? new[] { readingOrder.Length, (readingOrder.Length + 1) / 2 }
+                         : new[] { (readingOrder.Length + 1) / 2, readingOrder.Length })
+        {
+            placed.Clear();
+            int[] tops = margins.Select(margin => margin.Top).ToArray();
+            bool fits = true;
+            for (int orderIndex = 0; orderIndex < readingOrder.Length; orderIndex++)
+            {
+                int i = readingOrder[orderIndex];
+                int column = orderIndex < firstColumnCount ? 0 : 1;
+                var margin = margins[column];
+                string translation = SafeThaiTranslation(translations[i]);
+                var text = new TextBlock {
+                    Text = translation, FontFamily = new FontFamily("Leelawadee UI"), FontSize = fontSize,
+                    Language = XmlLanguage.GetLanguage("th-TH"), Foreground = Brushes.Black,
+                    TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center
+                };
+                double insetX = padding * scaleX, insetY = scaleY;
+                double contentWidth = margin.Width * scaleX - insetX * 2;
+                if (!WrapWords(text, ThaiWords(translation), contentWidth)) { fits = false; break; }
+                text.Measure(new Size(contentWidth, double.PositiveInfinity));
+                int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
+                if (tops[column] + height > margin.Bottom) { fits = false; break; }
+                var bounds = new Drawing.Rectangle(margin.Left, tops[column], margin.Width, height);
+                text.Foreground = ForegroundBrush(marginBackgrounds[column]);
+                placed.Add((new Border { Tag = i, Background = marginBackgrounds[column],
+                    Padding = new Thickness(insetX, insetY, insetX, insetY), Child = text }, bounds));
+                tops[column] += height + 1;
+            }
+            if (!fits) continue;
+            rollbackChildren ??= canvas.Children.Cast<UIElement>().ToArray();
+            canvas.Children.Clear();
+            for (int i = 0; i < masks.Length; i++)
+                if (masks[i].Width > 0 && masks[i].Height > 0)
+                    canvas.Children.Add(Positioned(new Border { Tag = i,
+                        Background = MaskBrush(masks[i], capture, pixels) }, masks[i]));
+            foreach (var (border, bounds) in placed) canvas.Children.Add(Positioned(border, bounds));
+            return true;
+        }
+        return false;
+
+        Border Positioned(Border border, Drawing.Rectangle bounds)
+        {
+            border.Width = bounds.Width * scaleX;
+            border.Height = bounds.Height * scaleY;
+            Canvas.SetLeft(border, (bounds.X - desktop.X) * scaleX);
+            Canvas.SetTop(border, (bounds.Y - desktop.Y) * scaleY);
+            return border;
+        }
+    }
+
+    private static string SafeThaiTranslation(string value)
+    {
+        var text = new string(value.Where(character => character is not (>= '\u3040' and <= '\u30ff')
+            and not (>= '\u3400' and <= '\u9fff') and not (>= '\uf900' and <= '\ufaff')).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(text) || text == "\u2026" ? "\u0e41\u0e1b\u0e25\u0e44\u0e21\u0e48\u0e2a\u0e33\u0e40\u0e23\u0e47\u0e08" : text;
     }
 
     internal static IEnumerable<double> CaptionFontSizes(int sourceHeight, double scaleY)

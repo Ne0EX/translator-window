@@ -86,11 +86,20 @@ internal static class Program
         SetProcessDpiAwarenessContext(new nint(-4));
         CheckThaiWrapping();
         SubtitleLayout.SelfCheck();
+        CheckCometMarginIfAvailable();
         Console.WriteLine("Subtitle geometry checks passed.");
         if (!args.Contains("--visual")) return;
+        if (args.Contains("--margin-preview"))
+        {
+            var previewApp = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            try { CheckDenseMarginFallback(); }
+            finally { previewApp.Shutdown(); }
+            return;
+        }
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         CheckColoredOverwrite();
         CheckTexturedOverwrite();
+        CheckDenseMarginFallback();
         var screen = Forms.Screen.PrimaryScreen!.Bounds;
         var capture = new Drawing.Rectangle(screen.Left + 80, screen.Top + 60, 720, Math.Min(800, screen.Height - 100));
         var regions = new[] {
@@ -284,6 +293,128 @@ internal static class Program
         Console.WriteLine("Textured manga overwrite rendering passed.");
     }
 
+    private static void CheckDenseMarginFallback()
+    {
+        const int width = 1000, height = 700;
+        var pixels = new byte[width * height * 4];
+        var regions = new System.Collections.Generic.List<TextRegion>();
+        var translations = new System.Collections.Generic.List<string>();
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                int offset = (y * width + x) * 4;
+                byte value = x < 280 || x >= 720 ? (byte)112 : (byte)(175 + (x + y) % 55);
+                pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
+            }
+        for (int row = 0; row < 8; row++)
+            for (int column = 0; column < 3; column++)
+            {
+                int x = 310 + column * 130, y = 42 + row * 80;
+                regions.Add(new TextRegion("original", new Drawing.Rectangle(x, y, 50, 50)));
+                int index = row * 3 + column;
+                int repeats = index switch { 5 => 24, 8 => 23, 12 => 22, 16 or 20 => 15, _ => 2 };
+                translations.Add(index == 0
+                    ? "\u65e5\u672c\u8a9e \u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35"
+                    : string.Join(" ", Enumerable.Repeat("\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35", repeats)));
+                for (int py = y - 10; py < y + 60; py++)
+                    for (int px = x - 20; px < x + 70; px++)
+                    {
+                        int offset = (py * width + px) * 4;
+                        pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 255;
+                    }
+                for (int py = y + 17; py < y + 33; py++)
+                    for (int px = x + 10; px < x + 40; px++)
+                    {
+                        int offset = (py * width + px) * 4;
+                        pixels[offset] = 0; pixels[offset + 1] = 100; pixels[offset + 2] = 0;
+                    }
+            }
+        var frame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+        frame.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+        frame.Freeze();
+        var screen = Forms.Screen.PrimaryScreen!.Bounds;
+        var capture = new Drawing.Rectangle(screen.Left + 40, screen.Top + 40, width, height);
+        var fixture = new Window { WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false, Topmost = true, Content = new Image { Source = frame, Stretch = Stretch.Fill } };
+        var overlay = new SubtitleOverlay();
+        try
+        {
+            fixture.Show();
+            var handle = new WindowInteropHelper(fixture).Handle;
+            SetWindowPos(handle, nint.Zero, capture.X, capture.Y, width, height, 0x0010);
+            Pump(Application.Current);
+            overlay.RenderMasks(capture, regions, 6, frame);
+            Require(((Canvas)overlay.Content).Children.OfType<Border>().Count() == regions.Count,
+                "Provisional overwrite must cover every detected source before translation finishes.");
+            overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
+            Pump(Application.Current);
+            var captions = ((Canvas)overlay.Content).Children.OfType<Border>().Where(border => border.Child is TextBlock).ToArray();
+            Require(captions.Length == translations.Count, "Dense fallback must preserve every Thai translation.");
+            double deviceScale = PresentationSource.FromVisual(overlay)!.CompositionTarget!.TransformFromDevice.M11;
+            var marginXs = captions.Select(border => Math.Round(Canvas.GetLeft(border), 1)).Distinct().ToArray();
+            var localMarginXs = marginXs.Select(x => x / deviceScale + Forms.SystemInformation.VirtualScreen.Left - capture.Left).ToArray();
+            Require(localMarginXs.Length is 1 or 2 && localMarginXs.All(x => x < 280 || x >= 720),
+                "Dense fallback captions must stay in one or two plain side margins, outside manga artwork.");
+            if (marginXs.Length == 2)
+                Require(localMarginXs[0] >= 720 && localMarginXs[1] < 280,
+                    "Reading order must continue from the right margin into the left margin.");
+            Require(captions.All(border => ((TextBlock)border.Child).FontSize >= 12)
+                && captions[0].Background is SolidColorBrush marginColor && marginColor.Color.R == 112,
+                "Every realistic Thai block must fit at 12 DIP or larger on the sampled gray margins.");
+            Require(captions.Select(border => (TextBlock)border.Child).All(text => text.Text.All(character =>
+                character is not (>= '\u3040' and <= '\u30ff') and not (>= '\u3400' and <= '\u9fff'))),
+                "Mixed model output must not expose Japanese in the fallback margin.");
+            var desktop = Forms.SystemInformation.VirtualScreen;
+            var transform = PresentationSource.FromVisual(overlay)!.CompositionTarget!.TransformFromDevice;
+            var overlayBitmap = new RenderTargetBitmap(desktop.Width, desktop.Height,
+                96 / transform.M11, 96 / transform.M22, PixelFormats.Pbgra32);
+            overlayBitmap.Render(overlay);
+            var compositeVisual = new DrawingVisual();
+            using (var drawing = compositeVisual.RenderOpen())
+            {
+                drawing.DrawImage(frame, new Rect(0, 0, width, height));
+                drawing.DrawImage(overlayBitmap,
+                    new Rect(desktop.X - capture.X, desktop.Y - capture.Y, desktop.Width, desktop.Height));
+            }
+            var preview = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+            preview.Render(compositeVisual);
+            var compositePixels = new byte[width * height * 4];
+            preview.CopyPixels(compositePixels, width * 4, 0);
+            Require(CountGreen(compositePixels) == 0, "Dense fallback must cover all original Japanese source pixels.");
+            int artOffset = (380 * width + 400) * 4;
+            Require(compositePixels[artOffset] == pixels[artOffset]
+                && compositePixels[artOffset + 1] == pixels[artOffset + 1]
+                && compositePixels[artOffset + 2] == pixels[artOffset + 2],
+                "Dense fallback must leave manga artwork outside source masks unchanged.");
+            Directory.CreateDirectory(".cache/diagnostics");
+            using var stream = File.Create(".cache/diagnostics/dense-margin-fallback.png");
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(preview));
+            encoder.Save(stream);
+            Console.WriteLine("Dense Thai side-margin fallback passed: .cache/diagnostics/dense-margin-fallback.png");
+        }
+        finally { overlay.Close(); fixture.Close(); }
+    }
+
+    private static void CheckCometMarginIfAvailable()
+    {
+        string path = Path.GetFullPath(".cache/diagnostics/comet-page-clean.jpg");
+        if (!File.Exists(path)) return;
+        var image = new BitmapImage();
+        image.BeginInit(); image.CacheOption = BitmapCacheOption.OnLoad; image.UriSource = new Uri(path); image.EndInit(); image.Freeze();
+        var bgra = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
+        var pixels = new byte[bgra.PixelWidth * bgra.PixelHeight * 4];
+        bgra.CopyPixels(pixels, bgra.PixelWidth * 4, 0);
+        var capture = new Drawing.Rectangle(0, 0, bgra.PixelWidth, bgra.PixelHeight);
+        var margin = SubtitleLayout.FindPlainMargin(capture,
+            new[] { new Drawing.Rectangle(20, 90, 100, 24) }, pixels);
+        if (margin is null || margin.Value.Top < 114 || margin.Value.Height < 400)
+            throw new InvalidOperationException("The real Comet page must use a clean side gutter below detected browser-toolbar text.");
+        var safeMargin = margin.Value;
+        Console.WriteLine($"Comet side margin: {safeMargin.Width}x{safeMargin.Height} at {safeMargin.Left},{safeMargin.Top}.");
+    }
+
     private static void Pump(Application app)
     {
         app.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
@@ -324,6 +455,14 @@ internal static class Program
                 var pixel = image.GetPixel(x, y);
                 if (pixel.G > pixel.R + 15 && pixel.G > pixel.B + 15) count++;
             }
+        return count;
+    }
+
+    private static int CountGreen(byte[] pixels)
+    {
+        int count = 0;
+        for (int offset = 0; offset < pixels.Length; offset += 4)
+            if (pixels[offset + 1] > 80 && pixels[offset + 1] > pixels[offset + 2] * 1.4) count++;
         return count;
     }
     private static void Require(bool condition, string message)

@@ -47,9 +47,12 @@ internal static class Program
             await Until(() => statuses.Any(s => s.Contains("not enough space")), running);
             await overlay.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             Require(!running.IsCompleted, "A layout failure must leave the live session running.");
-            Require(!overlay.IsVisible && ((Canvas)overlay.Content).Children.Count == 0,
-                "A changed text box with an unreadable fit must clear stale artwork, mask and caption visuals.");
-            Require(statuses.Last().Contains("Watching for changes"), "A layout failure must explain that the stale caption was cleared.");
+            var failedVisuals = ((Canvas)overlay.Content).Children.OfType<Border>().ToArray();
+            Require(overlay.IsVisible && failedVisuals.Length == 2
+                && failedVisuals.Any(border => border.Child is TextBlock text && text.Text == "First translated caption"),
+                "An unreadable background rescan must keep the last readable caption visible.");
+            Require(statuses.Last().Contains("Watching for changes") || statuses.Last().Contains("Waiting for a readable frame"),
+                "A layout failure must explain that the app is waiting for a readable frame.");
             int completed = statuses.Count(s => s.Contains("translated blocks"));
             ScreenCapture.Marker = 3;
             await Until(() => statuses.Count(s => s.Contains("translated blocks")) > completed, running);
@@ -59,7 +62,7 @@ internal static class Program
             try { await running.WaitAsync(TimeSpan.FromSeconds(10)); throw new Exception("Invalid model output was swallowed."); }
             catch (InvalidOperationException error) when (error is not SubtitleLayoutException && error.Message.Contains("empty translation")) { }
             Require(!overlay.IsVisible, "Fatal model errors must still end and clean up the session.");
-            Console.WriteLine("PASS: layout failure clears stale visuals, session stays alive, next frame recovers, invalid model reply remains fatal.");
+            Console.WriteLine("PASS: layout failure holds the last caption, session stays alive, next frame recovers, invalid model reply remains fatal.");
         }
         finally
         {
