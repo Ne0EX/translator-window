@@ -60,6 +60,29 @@ public sealed class SubtitleOverlay : Window
 
     internal void ConfirmRender() => rollbackChildren = null;
 
+    internal void ShiftVertical(int pixels, IReadOnlyList<int>? retainedIndices = null)
+    {
+        Dispatcher.VerifyAccess();
+        var scale = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice.M22 ?? 1;
+        Dictionary<int, int>? remap = retainedIndices?.Select((oldIndex, newIndex) => (oldIndex, newIndex))
+            .ToDictionary(pair => pair.oldIndex, pair => pair.newIndex);
+        for (int i = canvas.Children.Count - 1; i >= 0; i--)
+        {
+            var child = canvas.Children[i];
+            if (remap is not null)
+            {
+                if (child is not Border border || border.Tag is not int oldIndex || !remap.TryGetValue(oldIndex, out int newIndex))
+                {
+                    canvas.Children.RemoveAt(i);
+                    continue;
+                }
+                border.Tag = newIndex;
+            }
+            double top = Canvas.GetTop(child);
+            Canvas.SetTop(child, (double.IsNaN(top) ? 0 : top) + pixels * scale);
+        }
+    }
+
     internal void RestorePrevious()
     {
         Dispatcher.VerifyAccess();
@@ -110,8 +133,9 @@ public sealed class SubtitleOverlay : Window
         var visuals = new List<(Border Border, Drawing.Rectangle Bounds)>();
 
         if (style == SubtitleStyle.Overwrite)
-            foreach (var mask in masks.Where(mask => mask.Width > 0 && mask.Height > 0))
-                visuals.Add((new Border { Background = MaskBrush(mask, captureBounds, backgroundPixels) }, mask));
+            for (int i = 0; i < masks.Length; i++)
+                if (masks[i].Width > 0 && masks[i].Height > 0)
+                    visuals.Add((new Border { Background = MaskBrush(masks[i], captureBounds, backgroundPixels), Tag = i }, masks[i]));
 
         for (int i = 0; i < regions.Count; i++)
         {
@@ -167,6 +191,7 @@ public sealed class SubtitleOverlay : Window
 
                     text.Foreground = ForegroundBrush(captionBackground!);
                     caption = new Border {
+                        Tag = i,
                         Background = captionBackground ?? Brushes.White, Padding = new Thickness(insetX, insetY, insetX, insetY),
                         Child = text
                     };

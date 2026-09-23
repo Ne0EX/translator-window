@@ -32,6 +32,8 @@ public sealed class LiveTranslationSession
         byte[]? previousHash = null;
         byte[]? lastScanHash = null;
         RegionFingerprint[]? stableRegions = null;
+        TranslatedFrame? stableTranslation = null;
+        TranslatedFrame? recognizedFrame = null;
         long lastScanStarted = 0;
         Rectangle previousBounds = default;
         long changedAt = 0;
@@ -52,6 +54,8 @@ public sealed class LiveTranslationSession
                         _version++;
                         previousHash = null;
                         stableRegions = null;
+                        stableTranslation = null;
+                        recognizedFrame = null;
                         lastScanHash = null;
                         _overlay.Clear();
                     }
@@ -77,11 +81,35 @@ public sealed class LiveTranslationSession
                     bool frameChanged = previousHash is null || !hash.AsSpan().SequenceEqual(previousHash);
                     bool boundsChanged = previousHash is not null && bounds.Value != previousBounds;
                     long now = Environment.TickCount64;
-                    bool textChanged = frameChanged && (stableRegions is null
-                        ? pending is null
-                        : stableRegions.Length == 0 || !RegionsMatch(bitmap, stableRegions));
+                    bool textChanged = frameChanged && (stableRegions is not null
+                        ? stableRegions.Length == 0 || !RegionsMatch(bitmap, stableRegions)
+                        : recognizedFrame is not null ? !RegionsMatch(bitmap, recognizedFrame.RegionFingerprints) : pending is null);
                     bool scanDue = pending is null && stableRegions is not null && lastScanHash is not null
                         && !hash.AsSpan().SequenceEqual(lastScanHash) && now - lastScanStarted >= 1000;
+                    var reusable = stableTranslation ?? recognizedFrame;
+                    if (textChanged && reusable?.Frame is not null)
+                    {
+                        using var sourceFrame = BitmapFromSnapshot(reusable.Frame);
+                        if (ScrollAlignment.TryEstimateVerticalShift(sourceFrame, bitmap, out int shift)
+                            && ScrollAlignment.TryMatchRegionsAfterShift(sourceFrame, bitmap, reusable.Regions, shift,
+                                out var regions, out var retainedIndices))
+                        {
+                            var fingerprints = FingerprintRegions(bitmap, regions);
+                            var translations = retainedIndices.Select(index => reusable.Translations[index]).ToArray();
+                            var unreadable = regions.Count(region => string.IsNullOrWhiteSpace(region.Text));
+                            var updated = reusable with { Regions = regions, Translations = translations, Frame = Snapshot(bitmap),
+                                UnreadableCount = unreadable, RegionFingerprints = fingerprints };
+                            _overlay.ShiftVertical(shift, retainedIndices);
+                            if (stableTranslation is not null)
+                            {
+                                stableTranslation = updated;
+                                stableRegions = fingerprints;
+                            }
+                            else recognizedFrame = updated;
+                            textChanged = false;
+                            _status("Captions follow the scroll; checking for new text…");
+                        }
+                    }
                     if (previousHash is null || boundsChanged || textChanged || scanDue)
                     {
                         // Let in-flight local workers finish; canceling kills their persistent model processes.
@@ -95,12 +123,16 @@ public sealed class LiveTranslationSession
                         if (boundsChanged)
                         {
                             stableRegions = null;
+                            stableTranslation = null;
+                            recognizedFrame = null;
                             lastScanHash = null;
                             _overlay.Clear();
                         }
-                        else if (textChanged && stableRegions is not null)
+                        else if (textChanged && (stableRegions is not null || recognizedFrame is not null))
                         {
                             stableRegions = null;
+                            stableTranslation = null;
+                            recognizedFrame = null;
                             _overlay.Clear();
                         }
                     }
@@ -117,8 +149,23 @@ public sealed class LiveTranslationSession
                             pendingCancellation?.Dispose();
                             pendingCancellation = null;
                         }
-                        if (result is not null && result.Version == _version
-                            && RegionsMatch(bitmap, result.RegionFingerprints))
+                        bool resultMatches = result is not null && result.Version == _version
+                            && RegionsMatch(bitmap, result.RegionFingerprints);
+                        if (result is not null && result.Version == _version && !resultMatches && result.Frame is not null)
+                        {
+                            using var sourceFrame = BitmapFromSnapshot(result.Frame);
+                            if (ScrollAlignment.TryEstimateVerticalShift(sourceFrame, bitmap, out int pendingShift)
+                                && ScrollAlignment.TryMatchRegionsAfterShift(sourceFrame, bitmap, result.Regions, pendingShift,
+                                    out var regions, out var retainedIndices))
+                            {
+                                var translations = retainedIndices.Select(index => result.Translations[index]).ToArray();
+                                result = result with { Regions = regions, Translations = translations, Frame = Snapshot(bitmap),
+                                    UnreadableCount = regions.Count(region => string.IsNullOrWhiteSpace(region.Text)),
+                                    RegionFingerprints = FingerprintRegions(bitmap, regions) };
+                                resultMatches = true;
+                            }
+                        }
+                        if (result is not null && result.Version == _version && resultMatches)
                         {
                             try
                             {
@@ -127,6 +174,8 @@ public sealed class LiveTranslationSession
                                 layoutTimer.Stop();
                                 _overlay.ConfirmRender();
                                 stableRegions = result.RegionFingerprints;
+                                stableTranslation = result;
+                                recognizedFrame = null;
                                 lastScanHash = result.FrameHash;
                                 lastScanStarted = result.ScanStarted;
                                 var unreadable = result.UnreadableCount > 0 ? $" \u00b7 {result.UnreadableCount} unreadable blocks; try zooming in" : "";
@@ -149,6 +198,7 @@ public sealed class LiveTranslationSession
                             _version++;
                             changedAt = now;
                             _overlay.Clear();
+                            recognizedFrame = null;
                         }
                     }
                     // Background-only animation keeps the current captions; scan changed pages once the worker is free.
@@ -160,7 +210,7 @@ public sealed class LiveTranslationSession
                         lastScanHash = hash;
                         pending = TranslateFrameAsync((Bitmap)bitmap.Clone(), bounds.Value, _version,
                             source, target, style, padding, pendingCancellation.Token, hideOriginals,
-                            captureTimer.ElapsedMilliseconds, hash, lastScanStarted);
+                            captureTimer.ElapsedMilliseconds, hash, lastScanStarted, frame => recognizedFrame = frame);
                     }
                 }
                 await Task.Delay(100, token);
@@ -191,7 +241,7 @@ public sealed class LiveTranslationSession
 
     private async Task<TranslatedFrame?> TranslateFrameAsync(Bitmap bitmap, Rectangle bounds, int version,
         string source, string target, SubtitleStyle style, int padding, CancellationToken token,
-        bool hideOriginals, long captureMs, byte[] frameHash, long scanStarted)
+        bool hideOriginals, long captureMs, byte[] frameHash, long scanStarted, Action<TranslatedFrame> recognized)
     {
         using (bitmap)
         {
@@ -221,6 +271,8 @@ public sealed class LiveTranslationSession
                 try { _overlay.Render(bounds, regions, regions.Select(_ => "\u2026").ToArray(), style, padding, frame); }
                 catch (SubtitleLayoutException) { /* Continue translating; the final caption may fit differently. */ }
             }
+            recognized(new(version, bounds, regions, regions.Select(_ => "\u2026").ToArray(), captureMs,
+                ocrTimer.ElapsedMilliseconds, 0, frame, unreadable, FingerprintRegions(bitmap, regions), frameHash, scanStarted));
             _status($"Translating {regions.Count} text blocks on this computer\u2026");
             var translationTimer = Stopwatch.StartNew();
             var translations = new List<string>(regions.Count);
@@ -249,6 +301,21 @@ public sealed class LiveTranslationSession
             return image;
         }
         finally { bitmap.UnlockBits(data); }
+    }
+
+    private static Bitmap BitmapFromSnapshot(BitmapSource frame)
+    {
+        var bitmap = new Bitmap(frame.PixelWidth, frame.PixelHeight, PixelFormat.Format32bppArgb);
+        var data = bitmap.LockBits(new Rectangle(0, 0, bitmap.Width, bitmap.Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var bytes = new byte[bitmap.Width * bitmap.Height * 4];
+            frame.CopyPixels(bytes, bitmap.Width * 4, 0);
+            for (int y = 0; y < bitmap.Height; y++)
+                Marshal.Copy(bytes, y * bitmap.Width * 4, IntPtr.Add(data.Scan0, y * data.Stride), bitmap.Width * 4);
+        }
+        finally { bitmap.UnlockBits(data); }
+        return bitmap;
     }
     internal static byte[] Fingerprint(Bitmap bitmap)
     {
