@@ -462,57 +462,78 @@ public sealed class SubtitleOverlay : Window
         return brush;
     }
 
-    private static Brush MaskBrush(Drawing.Rectangle mask, Drawing.Rectangle capture, byte[]? pixels)
+    internal static Brush MaskBrush(Drawing.Rectangle mask, Drawing.Rectangle capture, byte[]? pixels)
     {
         if (pixels is null) return Brushes.White;
-        if ((long)mask.Width * mask.Height > 30_000)
+        var fill = new byte[checked(mask.Width * mask.Height * 4)];
+        var above = Sample(mask.Left + mask.Width / 2 - 6, mask.Left + mask.Width / 2 + 6, mask.Top - 8);
+        var below = Sample(mask.Left + mask.Width / 2 - 6, mask.Left + mask.Width / 2 + 6, mask.Bottom + 8);
+        for (int y = 0; y < mask.Height; y++)
         {
-            int tileHeight = 8;
-            int tileTop = mask.Top - tileHeight >= capture.Top ? mask.Top - tileHeight
-                : mask.Bottom + tileHeight <= capture.Bottom ? mask.Bottom : -1;
-            if (tileTop >= 0 && mask.Left >= capture.Left && mask.Right <= capture.Right)
+            int sourceY = Math.Clamp(mask.Top + y, capture.Top, capture.Bottom - 1);
+            var left = Sample(mask.Left - 14, mask.Left - 2, sourceY);
+            var right = Sample(mask.Right + 2, mask.Right + 14, sourceY);
+            if (left is null && right is null)
             {
-                var tile = new byte[mask.Width * tileHeight * 4];
-                for (int y = 0; y < tileHeight; y++)
-                {
-                    int offset = ((tileTop + y - capture.Y) * capture.Width + mask.Left - capture.X) * 4;
-                    Array.Copy(pixels, offset, tile, y * mask.Width * 4, mask.Width * 4);
-                }
-                var texture = BitmapSource.Create(mask.Width, tileHeight, 96, 96, PixelFormats.Bgra32, null, tile, mask.Width * 4);
-                texture.Freeze();
-                var brush = new ImageBrush(texture) {
-                    Stretch = Stretch.None, TileMode = TileMode.Tile, ViewportUnits = BrushMappingMode.Absolute,
-                    Viewport = new Rect(0, 0, mask.Width, tileHeight)
-                };
-                brush.Freeze();
-                return brush;
+                left = above ?? below ?? Colors.White;
+                right = below ?? above ?? Colors.White;
+            }
+            else { left ??= right; right ??= left; }
+            for (int x = 0; x < mask.Width; x++)
+            {
+                double t = (x + 0.5) / mask.Width;
+                int offset = (y * mask.Width + x) * 4;
+                fill[offset] = (byte)Math.Round(left!.Value.B * (1 - t) + right!.Value.B * t);
+                fill[offset + 1] = (byte)Math.Round(left.Value.G * (1 - t) + right.Value.G * t);
+                fill[offset + 2] = (byte)Math.Round(left.Value.R * (1 - t) + right.Value.R * t);
+                fill[offset + 3] = 255;
             }
         }
-        var sample = Drawing.Rectangle.Intersect(Drawing.Rectangle.Inflate(mask, 3, 3), capture);
-        long r = 0, g = 0, b = 0;
-        int count = 0, bright = 0;
-        for (int y = sample.Top; y < sample.Bottom; y += 2)
-            for (int x = sample.Left; x < sample.Right; x += 2)
-            {
-                if (mask.Contains(x, y)) continue;
-                int offset = ((y - capture.Y) * capture.Width + x - capture.X) * 4;
-                byte blue = pixels[offset], green = pixels[offset + 1], red = pixels[offset + 2];
-                b += blue; g += green; r += red; count++;
-                if (red >= 232 && green >= 232 && blue >= 232) bright++;
-            }
-        if (count == 0) return Brushes.White;
-        if (bright >= count * 0.7) return Brushes.White;
-        var color = new SolidColorBrush(Color.FromRgb((byte)(r / count), (byte)(g / count), (byte)(b / count)));
-        color.Freeze();
-        return color;
+        var texture = BitmapSource.Create(mask.Width, mask.Height, 96, 96, PixelFormats.Bgra32, null, fill, mask.Width * 4);
+        texture.Freeze();
+        var brush = new ImageBrush(texture) { Stretch = Stretch.Fill };
+        brush.Freeze();
+        return brush;
+
+        Color? Sample(int startX, int endX, int centerY)
+        {
+            startX = Math.Max(startX, capture.Left);
+            endX = Math.Min(endX, capture.Right);
+            if (startX >= endX || centerY < capture.Top - 4 || centerY >= capture.Bottom + 4) return null;
+            int top = Math.Max(capture.Top, centerY - 4), bottom = Math.Min(capture.Bottom, centerY + 5);
+            int brightest = 0;
+            for (int sy = top; sy < bottom; sy++)
+                for (int sx = startX; sx < endX; sx++)
+                {
+                    int offset = ((sy - capture.Top) * capture.Width + sx - capture.Left) * 4;
+                    brightest = Math.Max(brightest, (pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3);
+                }
+            long b = 0, g = 0, r = 0;
+            int count = 0;
+            for (int sy = top; sy < bottom; sy++)
+                for (int sx = startX; sx < endX; sx++)
+                {
+                    int offset = ((sy - capture.Top) * capture.Width + sx - capture.Left) * 4;
+                    if ((pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3 < brightest - 24) continue;
+                    b += pixels[offset]; g += pixels[offset + 1]; r += pixels[offset + 2]; count++;
+                }
+            return count == 0 ? null : Color.FromRgb((byte)(r / count), (byte)(g / count), (byte)(b / count));
+        }
     }
 
-    private static Brush ForegroundBrush(Brush background)
+    internal static Brush ForegroundBrush(Brush background)
     {
-        if (background is SolidColorBrush solid)
+        Color? color = background is SolidColorBrush solid ? solid.Color : null;
+        if (background is ImageBrush { ImageSource: BitmapSource image })
         {
-            var color = solid.Color;
-            double luminance = (0.299 * color.R) + (0.587 * color.G) + (0.114 * color.B);
+            var bgra = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0);
+            var pixel = new byte[4];
+            bgra.CopyPixels(new Int32Rect(image.PixelWidth / 2, image.PixelHeight / 2, 1, 1), pixel, 4, 0);
+            color = Color.FromRgb(pixel[2], pixel[1], pixel[0]);
+        }
+        if (color is { } sampled)
+        {
+            double luminance = (0.299 * sampled.R) + (0.587 * sampled.G) + (0.114 * sampled.B);
             if (luminance < 145) return Brushes.White;
         }
         return Brushes.Black;

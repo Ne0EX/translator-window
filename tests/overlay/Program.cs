@@ -84,6 +84,7 @@ internal static class Program
     private static void Main(string[] args)
     {
         SetProcessDpiAwarenessContext(new nint(-4));
+        CheckLargeMaskGradient();
         CheckThaiWrapping();
         SubtitleLayout.SelfCheck();
         CheckCometMarginIfAvailable();
@@ -255,9 +256,48 @@ internal static class Program
             overlay.UpdateLayout();
             Require(((Canvas)overlay.Content).Children.OfType<Border>().Any(b => b.Child is TextBlock),
                 "Overwrite must render a caption over a colored manga page.");
+            Require(((Canvas)overlay.Content).Children.OfType<Border>().Where(b => b.Child is TextBlock)
+                .All(b => ((TextBlock)b.Child).Foreground == Brushes.White),
+                "Dark sampled backgrounds must keep Thai captions readable.");
         }
         finally { overlay.Close(); }
         Console.WriteLine("Colored manga overwrite rendering passed.");
+    }
+
+    private static void CheckLargeMaskGradient()
+    {
+        const int width = 280, height = 360;
+        var pixels = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                int offset = (y * width + x) * 4;
+                byte shade = (byte)(80 + y / 2);
+                pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = shade;
+                pixels[offset + 3] = 255;
+            }
+        var mask = new Drawing.Rectangle(40, 60, 200, 200);
+        var brush = SubtitleOverlay.MaskBrush(mask, new Drawing.Rectangle(0, 0, width, height), pixels);
+        var visual = new DrawingVisual();
+        using (var drawing = visual.RenderOpen())
+            drawing.DrawRectangle(brush, null, new Rect(0, 0, mask.Width, mask.Height));
+        var rendered = new RenderTargetBitmap(mask.Width, mask.Height, 96, 96, PixelFormats.Pbgra32);
+        rendered.Render(visual);
+        var actual = new byte[mask.Width * mask.Height * 4];
+        rendered.CopyPixels(actual, mask.Width * 4, 0);
+        foreach (int y in new[] { 40, 100, 160 })
+        {
+            int shade = actual[(y * mask.Width + mask.Width / 2) * 4];
+            int expected = 80 + (mask.Top + y) / 2;
+            Require(Math.Abs(shade - expected) <= 12,
+                $"A large source mask must follow the page gradient, not repeat an adjacent strip (y={y}: {shade} vs {expected}).");
+        }
+        Array.Fill(pixels, (byte)40);
+        for (int offset = 3; offset < pixels.Length; offset += 4) pixels[offset] = 255;
+        Require(SubtitleOverlay.ForegroundBrush(SubtitleOverlay.MaskBrush(mask,
+            new Drawing.Rectangle(0, 0, width, height), pixels)) == Brushes.White,
+            "Dark reconstructed page backgrounds need white translation text.");
+        Console.WriteLine("Large mask background tracks the page gradient.");
     }
 
     private static void CheckTexturedOverwrite()
