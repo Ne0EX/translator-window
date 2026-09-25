@@ -30,6 +30,14 @@ In a configured checkout, double-click **Start Translator.cmd**.
 On another Windows 10 (2004+) / Windows 11 x64 machine, install Python 3.12 and the
 [Microsoft Visual C++ x64 runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe), then run:
 
+Thai target captions also require the Windows Thai Basic language feature for
+dictionary word breaking. Install it from **Settings > Time & language > Language
+& region**, or run this once in an elevated PowerShell window:
+
+```powershell
+Add-WindowsCapability -Online -Name 'Language.Basic~~~th-TH~0.0.1.0'
+```
+
 ```powershell
 .\scripts\setup.ps1
 # For the tested NVIDIA CUDA configuration:

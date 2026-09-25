@@ -576,7 +576,10 @@ public sealed class SubtitleOverlay : Window
     internal static string[] ThaiWords(string value)
     {
         // Windows supplies dictionary boundaries for Thai, whose words are not separated by spaces.
-        var tokens = new Windows.Data.Text.WordsSegmenter("th").GetTokens(value);
+        var segmenter = new Windows.Data.Text.WordsSegmenter("th");
+        if (segmenter.ResolvedLanguage == "und")
+            throw new InvalidOperationException("Thai word breaking is unavailable. Install the Windows Thai Basic language feature, then restart Translumo.");
+        var tokens = segmenter.GetTokens(value);
         var textElements = StringInfo.ParseCombiningCharacters(value).ToHashSet();
         var words = new List<string>();
         int start = 0;
