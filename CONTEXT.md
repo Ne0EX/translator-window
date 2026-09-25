@@ -53,6 +53,10 @@ visible source text.
 **Local processing**: Recognition and translation performed on the reader's
 computer; captured images and recognized text are not sent to translation services.
 
+**Remote translation**: Translation of recognized text by an external service,
+with that text leaving the reader's computer.
+_Avoid_: Local processing when translation uses an external service
+
 **Text detection**: Identification of areas in a captured view that appear to
 contain source text.
 _Avoid_: Recognition when only text locations are known
@@ -79,6 +83,10 @@ _Avoid_: Whole-chart paragraph
 **Chart connector**: A line or branch indicating a relationship between diagram
 entries; it is part of the source content.
 
+**Text container**: The visual area intended for a source passage, such as a
+speech balloon, narration box, or banner; it can be larger than the text region.
+_Avoid_: Text region when referring to the available reading space
+
 ### Caption presentation
 
 **Caption**: Translated text presented for an associated source text region.
@@ -99,6 +107,18 @@ _Avoid_: Source editing, inpainting
 **Source cover**: An opaque area of the caption layer that conceals source text
 for subtitle overwrite.
 _Avoid_: Erased text, modified artwork
+
+**Source-text footprint**: The shape occupied by the original lettering within
+a text region, excluding the surrounding background and container border.
+_Avoid_: Text region when referring only to the lettering
+
+**Background reconstruction**: An approximation of the appearance behind
+source lettering, used in the caption layer when concealing that lettering.
+_Avoid_: Original artwork when the concealed appearance has been inferred
+
+**Caption style**: The typeface, weight, color, outline, and emphasis of a
+caption, distinct from its position and line arrangement.
+_Avoid_: Font size when referring to the full visual treatment
 
 **Caption placement**: The position, size, and line arrangement of a caption in
 relation to its source text and the available reading space.

@@ -5,6 +5,10 @@
 [Release notes](docs/releases/0.1.0.md) · [Changelog](CHANGELOG.md) ·
 [Problem and decision ledger](docs/project-ledger.md) · [Domain glossary](CONTEXT.md)
 
+Next version: [v0.2.0 plan](docs/plans/0.2.0.md) ·
+[Tracking issue](https://github.com/Ne0EX/translator-window/issues/1) ·
+[Reader feedback and evidence](docs/feedback/2026-09-25-v0.2.0.md)
+
 A Windows fork of [ramjke/Translumo](https://github.com/ramjke/Translumo).
 OCR and translation run on your computer. The executable excludes the upstream
 cloud translators, proxy tools, updater, and automatic runtime downloads.
