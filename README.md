@@ -43,6 +43,9 @@ local model weights. Allow several GB for installed models and caches. Runtime
 recognition and translation work offline. CPU inference is available; NVIDIA CUDA
 is recommended for manga reading.
 
+Thai caption wrapping uses the ICU word breaker included with supported Windows
+versions; installing a Thai language pack is not required.
+
 Keep the project folder together: the app is in `artifacts/app`, Python in `.venv`,
 and weights in `models/hy-mt2`, `models/tessdata`, `models/comic-text-detector`, and
 `models/manga-ocr`. A Python virtual environment is machine-specific: run setup
