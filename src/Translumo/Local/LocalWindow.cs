@@ -45,7 +45,7 @@ public sealed class LocalWindow : Window
     public LocalWindow()
     {
         root = FindRoot();
-        Title = "Translumo Local";
+        Title = $"Translumo Local {typeof(LocalWindow).Assembly.GetName().Version?.ToString(3)}";
         Width = 610; Height = 790; MinWidth = 490; MinHeight = 580;
         FontFamily = new FontFamily("Segoe UI");
         FontSize = 14; Background = Brushes.WhiteSmoke;
@@ -78,7 +78,7 @@ public sealed class LocalWindow : Window
         LoadSettings();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 16) };
         buttons.Children.Add(start); buttons.Children.Add(stop); panel.Children.Add(buttons); panel.Children.Add(status);
-        panel.Children.Add(new TextBlock { Text = "Manga overwrite covers detected text while keeping the page visible.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 10, 0, 0) });
+        panel.Children.Add(new TextBlock { Text = "Keep reading and scrolling while translated captions appear.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 10, 0, 0) });
         start.Click += async (_, _) => { running = StartAsync(); await running; };
         stop.Click += (_, _) => cancellation?.Cancel();
         mode.SelectionChanged += (_, _) => { UpdateCaptureControls(); status.Text = "Choose the capture target, then start translation."; };
@@ -151,6 +151,7 @@ public sealed class LocalWindow : Window
         try
         {
             Func<Rectangle?> getBounds;
+            nint selectedWindow = 0;
             if (mode.SelectedIndex == 0)
             {
                 if (area.Width < 4 || area.Height < 4) throw new InvalidOperationException("Select an area first.");
@@ -160,6 +161,7 @@ public sealed class LocalWindow : Window
             {
                 if (windows.SelectedItem is not WindowTarget selected) throw new InvalidOperationException("Select a visible application window.");
                 getBounds = () => ScreenCapture.GetWindowBounds(selected.Handle);
+                selectedWindow = selected.Handle;
             }
             else
             {
@@ -179,7 +181,12 @@ public sealed class LocalWindow : Window
             status.Text = "Loading the local model…";
             var ocr = new SpatialOcr(Path.Combine(root, "models", "tessdata"), python.Text,
                 Path.Combine(root, "local-ocr", "worker.py"), Path.Combine(root, "models", "comic-text-detector", "comictextdetector.onnx"));
-            var session = new LiveTranslationSession(translator, overlay, text => status.Text = text, ocr);
+            var windowSource = PresentationSource.FromVisual(this) as HwndSource
+                ?? throw new InvalidOperationException("The translation window is not ready.");
+            nint overlayWindow = new WindowInteropHelper(overlay).EnsureHandle();
+            using var navigation = new NavigationInputObserver(windowSource, getBounds, selectedWindow,
+                new WindowInteropHelper(this).Handle, overlayWindow);
+            var session = new LiveTranslationSession(translator, overlay, text => status.Text = text, ocr, navigation);
             await session.RunAsync(getBounds, sourceCode, (string)target.SelectedValue,
                 style.SelectedIndex == 0 ? SubtitleStyle.Overlay : SubtitleStyle.Overwrite, (int)padding.Value, cancellation.Token, hideOriginals);
         }

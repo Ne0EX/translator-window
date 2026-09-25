@@ -1,5 +1,10 @@
 # Translumo Local
 
+**Version 0.1.0 · Windows x64 · initial source release**
+
+[Release notes](docs/releases/0.1.0.md) · [Changelog](CHANGELOG.md) ·
+[Problem and decision ledger](docs/project-ledger.md)
+
 A Windows fork of [ramjke/Translumo](https://github.com/ramjke/Translumo).
 OCR and translation run on your computer. The executable excludes the upstream
 cloud translators, proxy tools, updater, and automatic runtime downloads.
@@ -16,7 +21,7 @@ and horizontal dialogue automatically.
 
 ## Run
 
-On this prepared machine, double-click **Start Translator.cmd**.
+In a configured checkout, double-click **Start Translator.cmd**.
 
 On another Windows 10 (2004+) / Windows 11 x64 machine, install Python 3.12 and the
 [Microsoft Visual C++ x64 runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe), then run:
@@ -43,20 +48,23 @@ Choose a capture mode, select its area/window/screen, then start. Window mode
 tracks the visible window as it moves and pauses when it is minimized. Keep the
 source visible; this is desktop capture. Clicks and scrolling pass through subtitles.
 Escape cancels area selection. Stop removes subtitles and releases the models.
+For manga in a browser, try a selected page area if tabs or controls are detected as text.
 
-Manga overwrite first covers the selected view while the models load. It then shows
-captured artwork with translated captions over the detected source text. While you
-scroll, it holds the last translated image until the next stable view is ready.
-This briefly freezes the displayed page instead of exposing newly scrolled source
-text. Detected blocks that cannot be read stay masked with an ellipsis while readable
-neighbors translate; the status reports the unreadable count. If a new view has no
-detected or readable text, it retains the previous view and reports that condition.
+Manga overwrite leaves the selected page visible while OCR and translation run.
+Translated captions replace each detected source region as its translation arrives; source
+text remains visible until its caption is ready. During navigation, captions hide and
+new capture work pauses briefly. After motion settles, fresh pixel and OCR checks
+determine whether captions can be restored or the page needs new recognition.
+A changed or text-free page stays visible while it is scanned. Blocks that cannot
+be read remain uncovered; the status reports the unreadable count. Literal ellipses
+remain ellipses rather than being labeled translation failures.
+With Japanese Windows OCR installed, a dense vertical contents page can use a
+second recognition pass and display its headings in two readable page columns.
 The controls remain visible so you can stop or change the selection.
 
 Cover padding adjusts the mask around detected text. Disable manga detection for
 ordinary desktop text; that path uses installed Windows OCR with local Tesseract
-fallback. Ordinary overwrite covers recognized text while translation runs, but
-does not hold the entire page during motion.
+fallback. Ordinary overwrite covers recognized text while translation runs.
 
 ## Build and verify
 
@@ -80,7 +88,8 @@ windows, minimize/restore, and cancellation. Generated evidence stays in ignored
 
 The optional real manga check needs the locally acquired, unscaled 1273 × 1800
 fixture and a display that fits it. Fixture attribution and acquisition details are
-in `artifacts/manga-test/source.md`; copyrighted fixture files are not in the repo.
+in [verification fixture provenance](docs/verification-fixtures.md); copyrighted
+fixture files are not in the repo.
 
 ```powershell
 .\.venv\Scripts\python.exe local-ocr/check_scroll.py --model models/comic-text-detector/comictextdetector.onnx --image artifacts/manga-test/page12.png
@@ -90,14 +99,21 @@ in `artifacts/manga-test/source.md`; copyrighted fixture files are not in the re
 ## Current limits
 
 The local model can mistranslate proper names, omitted subjects, and short dialogue.
+Family chart detection now separates the reported merged labels, but translated
+names, generation numbers, and parenthetical status notes can still be wrong.
+Narrow labels may use numbered captions in a side margin.
 The [measured model comparison](local-model/QUALITY.md) records these limits; successful
 OCR and target-language output do not establish human-quality translation.
 Seamless manga/webtoon reading remains an acceptance goal, not a guarantee for all
 pages: stylized text can evade detection, small text needs zooming, and rectangular
 white masks can cover artwork. This does not perform image inpainting. Dense pages
-can run out of readable caption space; failed layouts keep the previous view covered
-and report fitting guidance. Whole-frame animation can prevent a view
+can run out of readable caption space; failed layouts clear stale captions
+and report fitting guidance. Larger animated areas can prevent a view
 from settling; mixed-DPI multiple-monitor behavior needs a physical hardware test.
+Native-feeling scrolling and page-turn animations remain under manual evaluation.
+The 450 ms navigation pause is provisional; no one-second end-to-end latency or
+universal smoothness guarantee is made. GPU/CPU memory pressure affects both startup
+and reading performance. Fresh-machine setup has not been qualified for this release.
 
 See [translation runtime](local-model/README.md), [manga OCR](local-ocr/README.md),
 [implementation and evidence](docs/implementation-plan.md), and

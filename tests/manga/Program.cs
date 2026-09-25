@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -70,11 +71,21 @@ internal static class Program
                 statuses.Add(message); Console.WriteLine(message);
                 if (message.Contains("local model")) frames++;
             }, ocr);
+            var latency = Stopwatch.StartNew();
             running = session.RunAsync(() => ScreenCapture.GetWindowBounds(handle), "ja-vert", "th",
                 SubtitleStyle.Overwrite, 8, cancel.Token, hideOriginals: true);
             await Paint(overlay);
-            Require(frames == 0 && !overlay.IsVisible, "Cold startup must leave the manga scene visible while models load.");
+            Require(frames == 0 && !overlay.IsVisible, "Cold startup must leave the manga interactive while models load.");
+            using (var cold = VisiblePixels(overlay, bounds))
+            {
+                cold.Save(Path.Combine(output, "live-cold-start-visible.png"), Drawing.Imaging.ImageFormat.Png);
+                using var original = new Drawing.Bitmap(Path.Combine(output, "live-original.png"));
+                Require(SamePixels(cold, original), "Cold startup must not replace the manga page.");
+            }
+            await Until(() => Captions(overlay).Count > 0, running, cancel.Token);
+            long firstCaptionMs = latency.ElapsedMilliseconds;
             await Until(() => frames >= 1, running, cancel.Token);
+            long completePageMs = latency.ElapsedMilliseconds;
             await Paint(overlay);
             var firstCaptions = Captions(overlay);
             Require(firstCaptions.Count == 8, $"Expected all eight real manga text regions; received {firstCaptions.Count}.");
@@ -85,50 +96,60 @@ internal static class Program
             using (var original = new Drawing.Bitmap(Path.Combine(output, "live-original.png")))
                 Require(!SamePixels(first, original), "The actual visible image must differ from original Japanese.");
 
-            // Scroll only the underlying original image; the completed translated frame must remain stable.
+            // A small scroll should move captions over the live page; newly exposed art remains visible.
             var transform = PresentationSource.FromVisual(fixture)!.CompositionTarget!.TransformFromDevice;
+            latency.Restart();
             image.RenderTransform = new TranslateTransform(0, -120 * transform.M22);
-            await Task.Delay(120, cancel.Token);
+            await Task.Delay(600, cancel.Token);
             await Application.Current.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
-            Require(frames == 1, "The scroll hold check must run before the next translation completes.");
             using (var held = VisiblePixels(overlay, bounds))
             {
                 held.Save(Path.Combine(output, "live-scroll-held.png"), Drawing.Imaging.ImageFormat.Png);
-                Require(SamePixels(first, held), "Scrolling exposed original pixels instead of holding the completed translated page.");
+                Require(!SamePixels(first, held)
+                    && !((Canvas)overlay.Content).Children.OfType<Border>().Any(border => border.Uid == "new-content-cover")
+                    && !((Canvas)overlay.Content).Children.OfType<Image>().Any()
+                    && Captions(overlay).Count == 8 && Captions(overlay).All(IsThai),
+                    "Scrolling must move captions without freezing or covering the page artwork.");
             }
             await Until(() => frames >= 2, running, cancel.Token);
+            long completeScrollMs = latency.ElapsedMilliseconds;
             await Paint(overlay);
             using var updated = VisiblePixels(overlay, bounds);
             // Preserve diagnostics before asserting every region survives scrolling.
             updated.Save(Path.Combine(output, "live-scroll-translated.png"), Drawing.Imaging.ImageFormat.Png);
             Require(Captions(overlay).Count == 8 && Captions(overlay).All(IsThai), "The scrolled page must retain eight Thai captions.");
-            Require(!SamePixels(first, updated), "The newly translated scroll frame must replace the held frame.");
+            Require(!SamePixels(first, updated), "The newly translated captions must follow the scrolled page.");
 
-            // A detector miss must keep the completed translation, not reveal a raw replacement page.
+            // A no-text page should remain visible without stale captions.
             int beforeBlank = statuses.Count;
             image.Source = null;
             await Until(() => statuses.Skip(beforeBlank).Any(status => status.StartsWith("No text detected")), running, cancel.Token);
             await Paint(overlay);
-            using (var blankHeld = VisiblePixels(overlay, bounds))
+            using (var blankPage = VisiblePixels(overlay, bounds))
             {
-                blankHeld.Save(Path.Combine(output, "live-empty-page-held.png"), Drawing.Imaging.ImageFormat.Png);
-                Require(SamePixels(updated, blankHeld), "A no-text frame exposed its raw background instead of holding the last translated view.");
+                blankPage.Save(Path.Combine(output, "live-empty-page-visible.png"), Drawing.Imaging.ImageFormat.Png);
+                Require(!overlay.IsVisible && !SamePixels(updated, blankPage), "A no-text frame must show its own background.");
             }
             fixture.WindowState = WindowState.Minimized;
             await Until(() => !overlay.IsVisible, running, cancel.Token);
             Require(((Canvas)overlay.Content).Children.Count == 0, "Minimizing the selected window must clear every overlay visual.");
             image.Source = bitmap;
+            latency.Restart();
             fixture.WindowState = WindowState.Normal; Place(handle, bounds);
+            await Until(() => Captions(overlay).Count > 0, running, cancel.Token);
+            long restoredFirstCaptionMs = latency.ElapsedMilliseconds;
             await Until(() => frames >= 3, running, cancel.Token);
             cancel.Cancel();
             try { await running; } catch (OperationCanceledException) { }
-            Require(!overlay.IsVisible && ((Canvas)overlay.Content).Children.Count == 0, "Stopping must remove the held page and subtitles.");
+            Require(!overlay.IsVisible && ((Canvas)overlay.Content).Children.Count == 0, "Stopping must remove subtitles.");
             File.WriteAllText(Path.Combine(output, "live-manga-check.json"), JsonSerializer.Serialize(new {
                 image = imagePath, bounds, firstCaptions, statuses,
-                coldStartupCovered = true, eightThaiCaptions = true, originalFlashDuringScroll = false, heldFramePixelIdentical = true,
-                newScrollFrameChanged = true, emptyPageHeldPixelIdentical = true, minimizedCleared = true, stoppedCleared = true
+                firstCaptionMs, completePageMs, completeScrollMs, restoredFirstCaptionMs,
+                coldStartupVisible = true, eightThaiCaptions = true, pageInteractiveDuringScroll = true,
+                newScrollFrameChanged = true, emptyPageVisible = true, minimizedCleared = true, stoppedCleared = true
             }, new JsonSerializerOptions { WriteIndented = true }));
-            Console.WriteLine("PASS: real manga -> eight Thai captions; actual native pixels; exact scroll hold; updated scroll frame; no-text frame hold; minimize and stop clear.");
+            Console.WriteLine($"Latency: cold first caption {firstCaptionMs} ms; complete page {completePageMs} ms; scroll {completeScrollMs} ms; restored first caption {restoredFirstCaptionMs} ms.");
+            Console.WriteLine("PASS: real manga -> eight Thai captions over live pixels; page stays visible through startup, scrolling and no-text; minimize and stop clear.");
         }
         finally
         {
@@ -170,6 +191,7 @@ internal static class Program
     {
         // Synchronous on the UI thread: the session cannot capture diagnostic inclusion and feed it back to OCR.
         overlay.UpdateLayout();
+        if (!overlay.IsVisible) { DwmFlush(); return ScreenCapture.Capture(bounds); }
         var handle = new WindowInteropHelper(overlay).Handle;
         Require(SetWindowDisplayAffinity(handle, 0), "Cannot include subtitles in the native diagnostic screenshot.");
         try { DwmFlush(); return ScreenCapture.Capture(bounds); }
@@ -178,7 +200,10 @@ internal static class Program
     private static bool SamePixels(Drawing.Bitmap left, Drawing.Bitmap right)
     {
         if (left.Size != right.Size) return false;
-        return Pixels(left).AsSpan().SequenceEqual(Pixels(right));
+        var first = Pixels(left);
+        var second = Pixels(right);
+        // DWM may round subpixel text colors by a few levels between captures.
+        return first.Length == second.Length && first.Where((value, i) => Math.Abs(value - second[i]) > 3).Any() == false;
     }
     private static byte[] Pixels(Drawing.Bitmap bitmap)
     {

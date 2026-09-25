@@ -9,7 +9,7 @@ os.environ["USE_TORCH"] = "1"
 os.environ["USE_TF"] = "0"
 
 
-class MangaRecognizer:
+class TorchMangaRecognizer:
     def __init__(self, model_path, device="auto"):
         model_path = Path(model_path).resolve()
         if not (model_path / "pytorch_model.bin").is_file():
@@ -43,9 +43,12 @@ class MangaRecognizer:
         if len(images) > 64:
             raise ValueError("At most 64 manga text crops are accepted per batch.")
         output = []
-        # Four crops keep decoder attention memory bounded alongside detection and translation on 6 GB GPUs.
-        for offset in range(0, len(images), 4):
-            crops = [image.convert("L").convert("RGB") for image in images[offset:offset + 4]]
+        # Eight crops are faster on the tested 6 GB GPU; retry four if memory is tight.
+        batch_size = 8 if self.device == "cuda" else 4
+        offset = 0
+        while offset < len(images):
+            crops = [image.convert("L").convert("RGB") for image in images[offset:offset + batch_size]]
+            pixels = None
             try:
                 pixels = self.processor(images=crops, return_tensors="pt").pixel_values.to(self.device)
                 if self.device == "cuda":
@@ -53,13 +56,30 @@ class MangaRecognizer:
                 with self.torch.inference_mode():
                     ids = self.model.generate(pixels, max_length=300)
             except RuntimeError:
+                if self.device == "cuda" and batch_size > 4:
+                    pixels = None
+                    self.torch.cuda.empty_cache()
+                    batch_size = 4
+                    continue
                 if not self.allow_cpu_fallback or self.device != "cuda":
                     raise
                 self.device = "cpu"
                 self.model.cpu().float()
                 self.torch.cuda.empty_cache()
                 return self.recognize(images)
-            if any(self.model.config.eos_token_id not in row.tolist() for row in ids):
-                raise ValueError("Japanese text crop exceeds the recognizer's 300-token limit; use a smaller crop.")
-            output.extend("".join(text.split()) for text in self.tokenizer.batch_decode(ids, skip_special_tokens=True))
+            decoded = self.tokenizer.batch_decode(ids, skip_special_tokens=True)
+            output.extend("".join(text.split()) if self.model.config.eos_token_id in row.tolist() else ""
+                          for row, text in zip(ids, decoded))
+            offset += len(crops)
         return output
+
+
+class MangaRecognizer:
+    """Choose the Torch-free cached ONNX backend when its exported assets exist."""
+
+    def __new__(cls, model_path, device="auto"):
+        from onnx_recognizer import OnnxMangaRecognizer
+
+        if OnnxMangaRecognizer.available(model_path):
+            return OnnxMangaRecognizer(model_path, device)
+        return TorchMangaRecognizer(model_path, device)

@@ -5,11 +5,123 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace Translumo.Local;
 
 public static class ScreenCapture
 {
+    internal sealed class Session : IDisposable
+    {
+        private const long NativeRetryDelayMs = 10_000;
+
+        private DesktopDuplicationCapture? _native;
+        private string? _failedTarget;
+        private long _retryAt;
+        private bool _disposed;
+
+        public Bitmap Capture(Rectangle bounds, CancellationToken token)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ValidateBounds(bounds);
+            token.ThrowIfCancellationRequested();
+
+            if (_native is not null && !_native.Contains(bounds))
+            {
+                _native.Dispose();
+                _native = null;
+                ClearFailure();
+            }
+
+            if (_native is null && CanAttemptNative(bounds))
+            {
+                try
+                {
+                    _native = new DesktopDuplicationCapture(bounds);
+                    ClearFailure();
+                }
+                catch (Exception error) when (IsExpectedCaptureFailure(error))
+                {
+                    RecordFailure(bounds);
+                }
+            }
+
+            if (_native is not null)
+            {
+                try
+                {
+                    if (_native.Bounds != bounds) _native.ResizeCrop(bounds);
+                    return _native.Capture(token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception error) when (IsExpectedCaptureFailure(error))
+                {
+                    DisableNative(bounds);
+                }
+            }
+
+            token.ThrowIfCancellationRequested();
+            return ScreenCapture.Capture(bounds);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _native?.Dispose();
+            _native = null;
+            _disposed = true;
+        }
+
+        private bool CanAttemptNative(Rectangle bounds)
+        {
+            if (_failedTarget is null) return true;
+            string target = TargetDisplay(bounds);
+            if (!string.Equals(target, _failedTarget, StringComparison.Ordinal))
+            {
+                ClearFailure();
+                return true;
+            }
+            return Environment.TickCount64 >= _retryAt;
+        }
+
+        private void DisableNative(Rectangle bounds)
+        {
+            _native?.Dispose();
+            _native = null;
+            RecordFailure(bounds);
+        }
+
+        private void RecordFailure(Rectangle bounds)
+        {
+            _failedTarget = TargetDisplay(bounds);
+            _retryAt = unchecked(Environment.TickCount64 + NativeRetryDelayMs);
+        }
+
+        private void ClearFailure()
+        {
+            _failedTarget = null;
+            _retryAt = 0;
+        }
+
+        private static bool IsExpectedCaptureFailure(Exception error)
+            => error is NotSupportedException or ArgumentOutOfRangeException or TimeoutException or COMException;
+
+        private static string TargetDisplay(Rectangle bounds)
+        {
+            var screens = System.Windows.Forms.Screen.AllScreens
+                .Where(screen => screen.Bounds.IntersectsWith(bounds))
+                .OrderBy(screen => screen.DeviceName, StringComparer.Ordinal)
+                .ToArray();
+            var containing = screens.FirstOrDefault(screen => screen.Bounds.Contains(bounds));
+            return containing is not null
+                ? $"contained:{containing.DeviceName}"
+                : $"intersecting:{string.Join("|", screens.Select(screen => screen.DeviceName))}";
+        }
+    }
+
     // Coordinates are physical desktop pixels, including negative monitor origins.
     public static Rectangle VirtualBounds => System.Windows.Forms.SystemInformation.VirtualScreen;
 
@@ -46,8 +158,7 @@ public static class ScreenCapture
 
     public static Bitmap Capture(Rectangle bounds)
     {
-        if (bounds.Width <= 0 || bounds.Height <= 0 || !VirtualBounds.Contains(bounds))
-            throw new ArgumentOutOfRangeException(nameof(bounds), "Capture bounds must be inside the visible desktop.");
+        ValidateBounds(bounds);
         var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
         try
         {
@@ -60,6 +171,12 @@ public static class ScreenCapture
             bitmap.Dispose();
             throw;
         }
+    }
+
+    private static void ValidateBounds(Rectangle bounds)
+    {
+        if (bounds.Width <= 0 || bounds.Height <= 0 || !VirtualBounds.Contains(bounds))
+            throw new ArgumentOutOfRangeException(nameof(bounds), "Capture bounds must be inside the visible desktop.");
     }
 
     public static bool ExcludeFromCapture(nint handle) => SetWindowDisplayAffinity(handle, 0x11);

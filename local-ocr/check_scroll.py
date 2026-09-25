@@ -10,11 +10,14 @@ from pathlib import Path
 import subprocess
 import sys
 import unicodedata
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 
-from worker import select_text_boxes
+from worker import reconcile_known_regions, select_text_boxes
+from manga_recognizer import MangaRecognizer, TorchMangaRecognizer
 
 
 def check_selection():
@@ -37,6 +40,62 @@ def check_selection():
     assert select_text_boxes(np.empty((0, 7), dtype=np.float32)) == []
 
 
+def check_known_reconciliation():
+    def region(x, y, width, height, text=None):
+        result = {'x': x, 'y': y, 'width': width, 'height': height, 'vertical': False}
+        if text is not None:
+            result['text'] = text
+        return result
+
+    known = [region(100, 100, 80, 60, 'known')]
+    reused, count = reconcile_known_regions([region(97, 98, 86, 65)], known, 500, 400)
+    assert count == 1 and reused[0].get('text') == 'known' \
+        and tuple(reused[0][key] for key in ('x', 'y', 'width', 'height')) == (100, 100, 80, 60), reused
+
+    split, count = reconcile_known_regions([region(100, 100, 35, 60), region(145, 100, 35, 60)], known, 500, 400)
+    assert count == 0 and all('text' not in item for item in split), split
+
+    second = region(200, 100, 80, 60, 'second')
+    merged, count = reconcile_known_regions([region(97, 98, 186, 65)], known + [second], 500, 400)
+    assert count == 0 and len(merged) == 1 and 'text' not in merged[0], merged
+
+    nearby, count = reconcile_known_regions([region(100, 100, 80, 60), region(185, 110, 6, 20)], known, 500, 400)
+    assert count == 1 and nearby[0].get('text') == 'known' and 'text' not in nearby[1], nearby
+
+    missed, count = reconcile_known_regions([], known, 500, 400)
+    assert count == 1 and missed[0].get('text') == 'known' \
+        and tuple(missed[0][key] for key in ('x', 'y', 'width', 'height')) == (100, 100, 80, 60), missed
+
+    for invalid in ([region(-1, 0, 10, 10, 'bad')], [region(0, 0, 10, 10, '')], 'bad'):
+        try:
+            reconcile_known_regions([], invalid, 500, 400)
+            raise AssertionError(invalid)
+        except ValueError:
+            pass
+
+
+def check_overlong_crop():
+    from PIL import Image
+
+    class Tensor:
+        def to(self, *_): return self
+        def half(self): return self
+
+    class Row:
+        def __init__(self, values): self.values = values
+        def tolist(self): return self.values
+
+    recognizer = TorchMangaRecognizer.__new__(TorchMangaRecognizer)
+    recognizer.device = 'cpu'
+    recognizer.torch = SimpleNamespace(inference_mode=nullcontext)
+    recognizer.processor = lambda **_: SimpleNamespace(pixel_values=Tensor())
+    recognizer.model = SimpleNamespace(config=SimpleNamespace(eos_token_id=2),
+                                       generate=lambda *_args, **_kwargs: [Row([1, 2]), Row([1] * 300)])
+    recognizer.tokenizer = SimpleNamespace(batch_decode=lambda *_args, **_kwargs: ['readable', 'runaway'])
+    image = Image.new('RGB', (8, 8), 'white')
+    assert recognizer.recognize([image, image]) == ['readable', '']
+
+
 def normalize(text):
     return ''.join(c for c in unicodedata.normalize('NFKC', text)
                    if not c.isspace() and not unicodedata.category(c).startswith('P'))
@@ -45,10 +104,13 @@ def normalize(text):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', type=Path)
+    parser.add_argument('--recognizer-model', type=Path)
     parser.add_argument('--image', type=Path)
     args = parser.parse_args()
     check_selection()
-    print('PASS: union recovery preserves separate bubbles, ignores isolated weak proposals and adjacent columns.', flush=True)
+    check_known_reconciliation()
+    check_overlong_crop()
+    print('PASS: union recovery and strict known-region reconciliation preserve split, merge and nearby detections.', flush=True)
     if not args.model or not args.image:
         return
     image = cv2.imread(str(args.image))
@@ -72,8 +134,11 @@ sys.argv = sys.argv[1:]
 sys.path.insert(0, str(pathlib.Path(sys.argv[0]).resolve().parent))
 runpy.run_path(sys.argv[0], run_name='__main__')
 """
-    result = subprocess.run([sys.executable, '-c', runner, str(Path(__file__).with_name('worker.py')),
-                             '--model', str(args.model)], input='\n'.join(requests)+'\n',
+    command = [sys.executable, '-c', runner, str(Path(__file__).with_name('worker.py')),
+               '--model', str(args.model)]
+    if args.recognizer_model:
+        command.extend(['--recognizer-model', str(args.recognizer_model)])
+    result = subprocess.run(command, input='\n'.join(requests)+'\n',
                             capture_output=True, text=True, encoding='utf-8', timeout=120)
     assert result.returncode == 0, result.stderr
     replies = [json.loads(line) for line in result.stdout.splitlines()]

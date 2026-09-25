@@ -22,6 +22,13 @@ if ($Cuda) {
 if ($LASTEXITCODE -ne 0) { throw 'ONNX runtime installation failed.' }
 & $Python (Join-Path $PSScriptRoot 'provision_manga.py')
 if ($LASTEXITCODE -ne 0) { throw 'Japanese manga recognition model provisioning failed.' }
+$mangaPath = Join-Path $PSScriptRoot '../models/manga-ocr'
+& $Python (Join-Path $PSScriptRoot 'export_manga_onnx.py') --model $mangaPath --output $mangaPath
+if ($LASTEXITCODE -ne 0) { throw 'Cached Japanese manga recognition graph export failed.' }
+if ($Cuda) {
+    & $Python (Join-Path $PSScriptRoot 'export_manga_onnx.py') --model $mangaPath --output $mangaPath --fp16
+    if ($LASTEXITCODE -ne 0) { throw 'Cached FP16 Japanese manga recognition graph export failed.' }
+}
 $destination = Join-Path $PSScriptRoot '../models/comic-text-detector'
 New-Item -ItemType Directory -Force $destination | Out-Null
 $path = Join-Path $destination 'comictextdetector.onnx'
@@ -32,5 +39,8 @@ if (!(Test-Path -LiteralPath $path) -or (Get-FileHash -LiteralPath $path -Algori
     if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ne $sha256) { throw 'Comic detector model failed SHA256 verification.' }
     Move-Item -LiteralPath $partial -Destination $path -Force
 }
+$blocksPath = Join-Path $destination 'comictextdetector-blocks.onnx'
+& $Python (Join-Path $PSScriptRoot 'prune_detector.py') $path $blocksPath
+if ($LASTEXITCODE -ne 0) { throw 'Block-only comic detector generation failed.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE.comic-text-detector') -Destination $destination -Force
 Write-Host 'Local comic text detector ready. Runtime inference is offline.'

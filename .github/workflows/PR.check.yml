@@ -1,7 +1,10 @@
-﻿name: PR. Build
+﻿name: Local release check
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ "local-translator" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "*" ]
 
@@ -9,10 +12,6 @@ jobs:
   build:
     runs-on: windows-latest  # For a list of available runner types, refer to
                              # https://help.github.com/en/actions/reference/workflow-syntax-for-github-actions#jobsjob_idruns-on
-    env:
-      Solution_Name: Translumo.sln
-      SkipBinariesExtract: true   # Skip download additional binaries, those are set in cproj as a prebuilt step
-      
     steps:
     - name: Checkout
       uses: actions/checkout@v3
@@ -26,7 +25,13 @@ jobs:
         dotnet-version: 8.0.x
         
     - name: Build the application
-      run: dotnet build $env:Solution_Name /p:Configuration=Release
+      run: dotnet build src/Translumo/Translumo.csproj --configuration Release --nologo
 
     - name: Check subtitle geometry
-      run: dotnet run --project tests/overlay/OverlayCheck.csproj
+      run: dotnet run --project tests/overlay/OverlayCheck.csproj --configuration Release
+
+    - name: Check vertical subtitle geometry
+      run: dotnet run --project tests/overlay/OverlayCheck.csproj --configuration Release --no-restore -- --vertical
+
+    - name: Check live layout and cancellation
+      run: dotnet run --project tests/layout-hold/LayoutHoldCheck.csproj --configuration Release

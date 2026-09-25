@@ -416,3 +416,7 @@ models/
 artifacts/
 .agents/
 __pycache__/
+
+# Keep versioned release notes despite the build-output Releases rule above.
+!docs/releases/
+!docs/releases/**

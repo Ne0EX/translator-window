@@ -2,12 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 
 namespace Translumo.Local;
 
 public sealed record TextRegion(string Text, Rectangle Bounds);
+
+internal sealed record OcrRegionProof(Rectangle CropBounds, byte[] Hash);
 
 public enum CaptureMode { SelectedArea, Window, Screen }
 
@@ -23,6 +26,8 @@ public sealed record OcrLanguage(string LanguageTag, string DisplayName)
 
 internal static class ScrollAlignment
 {
+    internal const int ComicCropPadding = 8;
+
     internal static bool TryEstimateVerticalShift(Bitmap previous, Bitmap current, out int shift)
     {
         shift = 0;
@@ -31,26 +36,22 @@ internal static class ScrollAlignment
         var newData = current.LockBits(new Rectangle(0, 0, current.Width, current.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         try
         {
-            int rowBytes = previous.Width * 4;
-            var oldPixels = CopyPixels(oldData, previous.Height, rowBytes);
-            var newPixels = CopyPixels(newData, current.Height, rowBytes);
-            var points = new List<(int Offset, int Y, byte Luma)>();
+            var points = new List<(int X, int Y, byte Luma)>();
             int sampleStep = Math.Max(4, (int)Math.Ceiling(Math.Max(previous.Width, previous.Height) / 320.0));
             for (int y = 2; y < previous.Height - 2; y += sampleStep)
                 for (int x = 2; x < previous.Width - 2; x += sampleStep)
                 {
-                    int offset = y * rowBytes + x * 4;
-                    byte center = Luma(oldPixels, offset);
-                    int contrast = Math.Abs(center - Luma(oldPixels, offset - 4))
-                        + Math.Abs(center - Luma(oldPixels, offset + 4))
-                        + Math.Abs(center - Luma(oldPixels, offset - rowBytes))
-                        + Math.Abs(center - Luma(oldPixels, offset + rowBytes));
-                    if (contrast >= 70) points.Add((offset, y, center));
+                    byte center = Luma(oldData, x, y);
+                    int contrast = Math.Abs(center - Luma(oldData, x - 1, y))
+                        + Math.Abs(center - Luma(oldData, x + 1, y))
+                        + Math.Abs(center - Luma(oldData, x, y - 1))
+                        + Math.Abs(center - Luma(oldData, x, y + 1));
+                    if (contrast >= 70) points.Add((x, y, center));
                 }
             if (points.Count > 1024)
             {
                 int stride = (int)Math.Ceiling(points.Count / 1024.0);
-                var sampled = new List<(int Offset, int Y, byte Luma)>(1024);
+                var sampled = new List<(int X, int Y, byte Luma)>(1024);
                 for (int i = 0; i < points.Count; i += stride) sampled.Add(points[i]);
                 points = sampled;
             }
@@ -66,7 +67,7 @@ internal static class ScrollAlignment
                     int y = point.Y + dy;
                     if ((uint)y >= (uint)current.Height) continue;
                     compared++;
-                    if (Math.Abs(point.Luma - Luma(newPixels, y * rowBytes + point.Offset % rowBytes)) <= 20)
+                    if (Math.Abs(point.Luma - Luma(newData, point.X, y)) <= 20)
                         matches++;
                 }
                 if (compared < Math.Max(24, points.Count * 0.45)) return;
@@ -130,17 +131,66 @@ internal static class ScrollAlignment
         return true;
     }
 
-    private static byte[] CopyPixels(BitmapData data, int height, int rowBytes)
+    internal static OcrRegionProof[] FingerprintOcrInputs(Bitmap bitmap, IReadOnlyList<TextRegion> regions)
+        => regions.Select(region => FingerprintOcrInput(bitmap, region.Bounds)).ToArray();
+
+    internal static OcrRegionProof[] ShiftOcrProofs(Bitmap previous, Bitmap current,
+        IReadOnlyList<TextRegion> previousRegions, IReadOnlyList<OcrRegionProof> previousProofs,
+        IReadOnlyList<int> retainedIndices, IReadOnlyList<TextRegion> retainedRegions)
     {
-        var pixels = new byte[rowBytes * height];
-        for (int y = 0; y < height; y++)
-            Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), pixels, y * rowBytes, rowBytes);
-        return pixels;
+        if (retainedIndices.Count != retainedRegions.Count) return Array.Empty<OcrRegionProof>();
+        var proofs = new OcrRegionProof[retainedRegions.Count];
+        for (int i = 0; i < retainedRegions.Count; i++)
+        {
+            var currentProof = FingerprintOcrInput(current, retainedRegions[i].Bounds);
+            int sourceIndex = retainedIndices[i];
+            if ((uint)sourceIndex >= (uint)previousRegions.Count || (uint)sourceIndex >= (uint)previousProofs.Count
+                || previousProofs[sourceIndex].Hash.Length == 0)
+            {
+                proofs[i] = currentProof with { Hash = Array.Empty<byte>() };
+                continue;
+            }
+            var expectedPrevious = FingerprintOcrInput(previous, previousRegions[sourceIndex].Bounds);
+            var oldProof = previousProofs[sourceIndex];
+            proofs[i] = oldProof.CropBounds == expectedPrevious.CropBounds
+                && oldProof.CropBounds.Size == currentProof.CropBounds.Size
+                && oldProof.Hash.AsSpan().SequenceEqual(expectedPrevious.Hash)
+                && oldProof.Hash.AsSpan().SequenceEqual(currentProof.Hash)
+                    ? currentProof
+                    : currentProof with { Hash = Array.Empty<byte>() };
+        }
+        return proofs;
     }
 
-    private static byte Luma(byte[] pixels, int offset)
+    internal static TextRegion[] ValidateOcrProofs(Bitmap bitmap, IReadOnlyList<TextRegion> regions,
+        IReadOnlyList<OcrRegionProof> proofs)
     {
-        int blue = pixels[offset], green = pixels[offset + 1], red = pixels[offset + 2];
+        if (regions.Count != proofs.Count) return Array.Empty<TextRegion>();
+        var valid = new List<TextRegion>();
+        for (int i = 0; i < regions.Count; i++)
+        {
+            if (string.IsNullOrWhiteSpace(regions[i].Text) || proofs[i].Hash.Length == 0) continue;
+            var current = FingerprintOcrInput(bitmap, regions[i].Bounds);
+            if (proofs[i].CropBounds == current.CropBounds
+                && proofs[i].Hash.AsSpan().SequenceEqual(current.Hash)) valid.Add(regions[i]);
+        }
+        return valid.ToArray();
+    }
+
+    private static OcrRegionProof FingerprintOcrInput(Bitmap bitmap, Rectangle bounds)
+    {
+        var image = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+        var crop = Rectangle.Intersect(image, Rectangle.Inflate(bounds, ComicCropPadding, ComicCropPadding));
+        return crop.Width > 0 && crop.Height > 0
+            ? new(crop, RegionHash(bitmap, crop))
+            : new(crop, Array.Empty<byte>());
+    }
+
+    private static byte Luma(BitmapData data, int x, int y)
+    {
+        int offset = checked(y * data.Stride + x * 4);
+        int pixel = Marshal.ReadInt32(IntPtr.Add(data.Scan0, offset));
+        int blue = pixel & 255, green = (pixel >> 8) & 255, red = (pixel >> 16) & 255;
         return (byte)((red * 77 + green * 150 + blue * 29) >> 8);
     }
 

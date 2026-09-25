@@ -26,6 +26,10 @@ if (($Cuda -and $runtimeHash -ne $cudaHash) -or (!$Cuda -and $runtimeHash -notin
 }
 & $venvPython (Join-Path $PSScriptRoot 'provision.py')
 if ($LASTEXITCODE -ne 0) { throw 'Local model provisioning failed.' }
+if ($Cuda) {
+    & $venvPython (Join-Path $PSScriptRoot 'provision_native.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Native translation runtime provisioning failed.' }
+}
 & $venvPython (Join-Path $PSScriptRoot 'check.py')
 if ($LASTEXITCODE -ne 0) { throw 'Offline worker check failed.' }
 Write-Host "Ready. Python: $venvPython"
