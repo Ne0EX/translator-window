@@ -653,17 +653,17 @@ internal static class Program
 
     private static void CheckVerticalIndex()
     {
-        const int width = 1600, height = 1000;
+        const int width = 960, height = 700;
         var pixels = new byte[width * height * 4];
         Array.Fill(pixels, (byte)255);
         var frame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
         frame.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
         frame.Freeze();
-        var regions = new[] { new TextRegion("目次", new Drawing.Rectangle(1400, 120, 35, 100)) }
+        var regions = new[] { new TextRegion("目次", new Drawing.Rectangle(840, 80, 24, 80)) }
             .Concat(Enumerable.Range(0, 8).Select(i => new TextRegion("その肆三輪山の大物主神",
-                new Drawing.Rectangle(1320 - i * 45, 200, 28, 500))))
+                new Drawing.Rectangle(800 - i * 28, 140, 24, 420))))
             .Concat(Enumerable.Range(0, 10).Select(i => new TextRegion("歴代天皇系図",
-                new Drawing.Rectangle(700 - i * 45, 200, 28, 500)))).ToArray();
+                new Drawing.Rectangle(420 - i * 28, 140, 24, 420)))).ToArray();
         var translations = regions.Select((_, i) => i == 0 ? "สารบัญ" : "เรื่องราวของภูเขาและทะเล").ToArray();
         translations[4] = "その添()";
         var overlay = new SubtitleOverlay();
