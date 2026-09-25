@@ -24,13 +24,6 @@ jobs:
       with:
         dotnet-version: 8.0.x
 
-    - name: Install Thai word breaking
-      shell: powershell
-      run: |
-        if ((Get-WindowsCapability -Online -Name 'Language.Basic~~~th-TH~0.0.1.0').State -ne 'Installed') {
-          Add-WindowsCapability -Online -Name 'Language.Basic~~~th-TH~0.0.1.0'
-        }
-        
     - name: Build the application
       run: dotnet build src/Translumo/Translumo.csproj --configuration Release --nologo
 

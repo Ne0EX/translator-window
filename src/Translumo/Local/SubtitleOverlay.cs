@@ -575,24 +575,38 @@ public sealed class SubtitleOverlay : Window
 
     internal static string[] ThaiWords(string value)
     {
-        // Windows supplies dictionary boundaries for Thai, whose words are not separated by spaces.
-        var segmenter = new Windows.Data.Text.WordsSegmenter("th");
-        if (segmenter.ResolvedLanguage == "und")
-            throw new InvalidOperationException("Thai word breaking is unavailable. Install the Windows Thai Basic language feature, then restart Translumo.");
-        var tokens = segmenter.GetTokens(value);
-        var textElements = StringInfo.ParseCombiningCharacters(value).ToHashSet();
-        var words = new List<string>();
-        int start = 0;
-        for (int i = 1; i < tokens.Count; i++)
+        if (value.Length == 0) return [value];
+        GCHandle pinned = default;
+        nint iterator = 0;
+        try
         {
-            int end = (int)tokens[i].SourceTextSegment.StartPosition;
-            // The dictionary may split before a Thai tone mark; keep the complete grapheme together.
-            if (!textElements.Contains(end)) continue;
-            words.Add(value[start..end]);
-            start = end;
+            pinned = GCHandle.Alloc(value, GCHandleType.Pinned);
+            int status = 0;
+            // Supported Windows versions ship ICU; negative status codes are success warnings.
+            iterator = IcuBreakOpen(1, "th", pinned.AddrOfPinnedObject(), value.Length, ref status);
+            if (iterator == 0 || status > 0) return [value];
+
+            var graphemes = StringInfo.ParseCombiningCharacters(value).ToHashSet();
+            var starts = new List<int> { 0 };
+            int previous = IcuBreakFirst(iterator);
+            bool sawWord = false;
+            for (int end; (end = IcuBreakNext(iterator)) != -1; previous = end)
+            {
+                if (previous < 0 || end <= previous || end > value.Length) return [value];
+                if (IcuBreakRuleStatus(iterator) < 100) continue;
+                if (sawWord && previous > 0 && graphemes.Contains(previous)) starts.Add(previous);
+                sawWord = true;
+            }
+            return starts.Select((start, index) => value[start..(index + 1 < starts.Count
+                ? starts[index + 1] : value.Length)]).ToArray();
         }
-        words.Add(value[start..]);
-        return words.ToArray();
+        catch (DllNotFoundException) { return [value]; }
+        catch (EntryPointNotFoundException) { return [value]; }
+        finally
+        {
+            if (iterator != 0) IcuBreakClose(iterator);
+            if (pinned.IsAllocated) pinned.Free();
+        }
     }
 
     internal static bool WrapWords(TextBlock text, IReadOnlyList<string> words, double width,
@@ -869,4 +883,15 @@ public sealed class SubtitleOverlay : Window
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetWindowDisplayAffinity(nint hwnd, out uint affinity);
+    [DllImport("icu.dll", EntryPoint = "ubrk_open", CallingConvention = CallingConvention.Cdecl)]
+    private static extern nint IcuBreakOpen(int type, [MarshalAs(UnmanagedType.LPStr)] string locale,
+        nint text, int length, ref int status);
+    [DllImport("icu.dll", EntryPoint = "ubrk_first", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int IcuBreakFirst(nint iterator);
+    [DllImport("icu.dll", EntryPoint = "ubrk_next", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int IcuBreakNext(nint iterator);
+    [DllImport("icu.dll", EntryPoint = "ubrk_getRuleStatus", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int IcuBreakRuleStatus(nint iterator);
+    [DllImport("icu.dll", EntryPoint = "ubrk_close", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void IcuBreakClose(nint iterator);
 }
