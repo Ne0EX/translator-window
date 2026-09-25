@@ -24,6 +24,13 @@ internal static class Program
             "A large textbox may use a larger font, within the caption size limit.");
         var text = new TextBlock { FontFamily = new FontFamily("Leelawadee UI"), FontSize = 20,
             Language = System.Windows.Markup.XmlLanguage.GetLanguage("th-TH"), TextWrapping = TextWrapping.NoWrap };
+        var segmenters = new[] { (Requested: "th", Value: new Windows.Data.Text.WordsSegmenter("th")),
+            (Requested: "th-TH", Value: new Windows.Data.Text.WordsSegmenter("th-TH")) };
+        Console.WriteLine($"Thai layout environment: OS={Environment.OSVersion.VersionString}; "
+            + $"Leelawadee UI installed={Fonts.SystemFontFamilies.Any(font => font.Source.Equals("Leelawadee UI", StringComparison.OrdinalIgnoreCase))}; "
+            + string.Join("; ", segmenters.Select(segmenter =>
+                $"{segmenter.Requested}->{segmenter.Value.ResolvedLanguage}=[{string.Join(" | ", segmenter.Value.GetTokens("มหาวิทยาลัยแพทย์ของอาวเวอร์ซู").Select(token =>
+                    $"{token.SourceTextSegment.StartPosition}:{token.SourceTextSegment.Length}:{token.Text}"))}]")));
         const string caption = "ดังนั้นซาตโต";
         var words = SubtitleOverlay.ThaiWords(caption);
         Require(string.Concat(words) == caption, "Thai segmentation must preserve the original characters.");
@@ -33,6 +40,12 @@ internal static class Program
         const string university = "มหาวิทยาลัยแพทย์ของอาวเวอร์ซู";
         Require(SubtitleOverlay.WrapWords(text, SubtitleOverlay.ThaiWords(university), 70),
             "A long Thai caption must wrap without splitting dictionary words.");
+        Console.WriteLine("Thai university wrap: " + string.Join(" | ", text.Text.Split('\n').Select(line => {
+            var measure = new TextBlock { Text = line.TrimEnd('\r'), FontFamily = text.FontFamily,
+                FontSize = text.FontSize, Language = text.Language, TextWrapping = TextWrapping.NoWrap };
+            measure.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            return $"{measure.Text}={measure.DesiredSize.Width:0.###} DIP";
+        })));
         Require(text.Text.Contains("มหาวิทยาลัย"), "Thai university word must stay intact.");
         Require(text.Text.Replace("\r", "").Replace("\n", "") == university, "Wrapping must not lose text.");
         foreach (string line in text.Text.Split('\n'))
