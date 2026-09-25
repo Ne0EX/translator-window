@@ -3,7 +3,7 @@
 **Version 0.1.0 · Windows x64 · initial source release**
 
 [Release notes](docs/releases/0.1.0.md) · [Changelog](CHANGELOG.md) ·
-[Problem and decision ledger](docs/project-ledger.md)
+[Problem and decision ledger](docs/project-ledger.md) · [Domain glossary](CONTEXT.md)
 
 A Windows fork of [ramjke/Translumo](https://github.com/ramjke/Translumo).
 OCR and translation run on your computer. The executable excludes the upstream
