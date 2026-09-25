@@ -575,6 +575,9 @@ public sealed class SubtitleOverlay : Window
 
     internal static string[] ThaiWords(string value)
     {
+        const int IcuWordBreakIterator = 1;
+        const int IcuBreakDone = -1;
+        const int IcuWordStatusMinimum = 100;
         if (value.Length == 0) return [value];
         GCHandle pinned = default;
         nint iterator = 0;
@@ -583,17 +586,17 @@ public sealed class SubtitleOverlay : Window
             pinned = GCHandle.Alloc(value, GCHandleType.Pinned);
             int status = 0;
             // Supported Windows versions ship ICU; negative status codes are success warnings.
-            iterator = IcuBreakOpen(1, "th", pinned.AddrOfPinnedObject(), value.Length, ref status);
+            iterator = IcuBreakOpen(IcuWordBreakIterator, "th", pinned.AddrOfPinnedObject(), value.Length, ref status);
             if (iterator == 0 || status > 0) return [value];
 
             var graphemes = StringInfo.ParseCombiningCharacters(value).ToHashSet();
             var starts = new List<int> { 0 };
             int previous = IcuBreakFirst(iterator);
             bool sawWord = false;
-            for (int end; (end = IcuBreakNext(iterator)) != -1; previous = end)
+            for (int end; (end = IcuBreakNext(iterator)) != IcuBreakDone; previous = end)
             {
                 if (previous < 0 || end <= previous || end > value.Length) return [value];
-                if (IcuBreakRuleStatus(iterator) < 100) continue;
+                if (IcuBreakRuleStatus(iterator) < IcuWordStatusMinimum) continue;
                 if (sawWord && previous > 0 && graphemes.Contains(previous)) starts.Add(previous);
                 sawWord = true;
             }
@@ -632,7 +635,7 @@ public sealed class SubtitleOverlay : Window
             for (int end = start; end < words.Count; end++)
             {
                 line += words[end];
-                string candidate = line.Trim();
+                string candidate = line;
                 if (lineWidths is null || !lineWidths.TryGetValue(candidate, out double measured))
                 {
                     measured = new FormattedText(candidate, culture, flowDirection, typeface, fontSize,
@@ -657,7 +660,7 @@ public sealed class SubtitleOverlay : Window
         for (int start = 0; start < words.Count; start = next[start])
         {
             if (lines.Length > 0) lines.AppendLine();
-            lines.Append(string.Concat(words.Skip(start).Take(next[start] - start)).Trim());
+            lines.Append(string.Concat(words.Skip(start).Take(next[start] - start)));
         }
         text.Text = lines.ToString();
         return true;

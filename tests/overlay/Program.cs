@@ -40,21 +40,20 @@ internal static class Program
         const string university = "มหาวิทยาลัยแพทย์ของอาวเวอร์ซู";
         Require(SubtitleOverlay.WrapWords(text, SubtitleOverlay.ThaiWords(university), 70),
             "A long Thai caption must wrap without splitting dictionary words.");
-        Console.WriteLine("Thai university wrap: " + string.Join(" | ", text.Text.Split('\n').Select(line => {
-            var measure = new TextBlock { Text = line.TrimEnd('\r'), FontFamily = text.FontFamily,
-                FontSize = text.FontSize, Language = text.Language, TextWrapping = TextWrapping.NoWrap };
-            measure.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            return $"{measure.Text}={measure.DesiredSize.Width:0.###} DIP";
-        })));
+        Console.WriteLine("Thai university wrap: " + string.Join(" | ", text.Text.Split('\n').Select(line =>
+            $"{line.TrimEnd('\r')}={MeasureLineWidth(line.TrimEnd('\r')):0.###} DIP")));
         Require(text.Text.Contains("มหาวิทยาลัย"), "Thai university word must stay intact.");
         Require(text.Text.Replace("\r", "").Replace("\n", "") == university, "Wrapping must not lose text.");
         foreach (string line in text.Text.Split('\n'))
-        {
-            var measure = new TextBlock { Text = line.TrimEnd('\r'), FontFamily = text.FontFamily,
-                FontSize = text.FontSize, Language = text.Language, TextWrapping = TextWrapping.NoWrap };
-            measure.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            Require(measure.DesiredSize.Width <= 70, "Every Thai line must fit without clipping.");
-        }
+            Require(MeasureLineWidth(line.TrimEnd('\r')) <= 70, "Every Thai line must fit without clipping.");
+        const string spacedCaption = "แพทย์ ของ";
+        var spacedWords = SubtitleOverlay.ThaiWords(spacedCaption);
+        double spacedWidth = spacedWords.Max(MeasureLineWidth);
+        Require(spacedWidth < MeasureLineWidth(spacedCaption)
+            && SubtitleOverlay.WrapWords(text, spacedWords, spacedWidth),
+            "A spaced Thai caption must wrap at its existing space.");
+        Require(text.Text.Replace("\r", "").Replace("\n", "") == spacedCaption,
+            "Wrapping must preserve spaces as well as Thai graphemes.");
         Require(!SubtitleOverlay.WrapWords(text, new[] { "มหาวิทยาลัย" }, 10),
             "A word wider than the caption must request another width or font size, never split characters.");
         const string decomposed = "ทํางานอย่างจริงจัง";
@@ -90,6 +89,13 @@ internal static class Program
 
         static bool IsMark(string value) => value.Length > 0 && CharUnicodeInfo.GetUnicodeCategory(value, 0)
             is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark;
+        double MeasureLineWidth(string value)
+        {
+            var measure = new TextBlock { Text = value, FontFamily = text.FontFamily,
+                FontSize = text.FontSize, Language = text.Language, TextWrapping = TextWrapping.NoWrap };
+            measure.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            return measure.DesiredSize.Width;
+        }
         Console.WriteLine("Thai word boundaries, balanced lines, preserved text and no-clipping checks passed.");
     }
 
