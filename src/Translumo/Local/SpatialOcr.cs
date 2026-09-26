@@ -51,6 +51,14 @@ public sealed class SpatialOcr : IDisposable
     public async Task<IReadOnlyList<TextRegion>> RecognizeAsync(Bitmap bitmap, string language, CancellationToken token)
         => (await RecognizeFrameAsync(bitmap, language, token, Array.Empty<TextRegion>())).Regions;
 
+    public async Task<IReadOnlyList<TextRegion>> RecognizeProgressiveAsync(Bitmap bitmap, string language,
+        CancellationToken token, Func<IReadOnlyList<TextRegion>, Task> progress)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        return (await RecognizeFrameProgressiveAsync(bitmap, language, token,
+            Array.Empty<TextRegion>(), progress)).Regions;
+    }
+
     internal async Task<(IReadOnlyList<TextRegion> Regions, bool HasOcrInputProof)> RecognizeFrameAsync(
         Bitmap bitmap, string language, CancellationToken token, IReadOnlyList<TextRegion> knownRegions)
         => await RecognizeFrameCoreAsync(bitmap, language, token, knownRegions, null);

@@ -272,10 +272,10 @@ internal static class Program
             fallbackCancellation.Token, hideOriginals: true);
         try
         {
-            await Until(() => fallbackStatuses.Any(s => s.Contains("translated blocks")), fallbackRun);
-            Require(((Canvas)fallbackOverlay.Content).Children.OfType<Border>().Any(b => b.Child is TextBlock t && t.Text == "Colored caption"),
-                "A textured overwrite page must keep the translated caption visible while covering the source.");
-            Console.WriteLine("PASS: textured overwrite keeps captions opaque.");
+            await Until(() => fallbackStatuses.Any(s => s.Contains("not enough space")), fallbackRun);
+            Require(!fallbackOverlay.IsVisible && ((Canvas)fallbackOverlay.Content).Children.Count == 0,
+                "A textured page without a qualified 12-DIP fit must leave source visible.");
+            Console.WriteLine("PASS: textured overwrite does not bypass the readable floor.");
         }
         finally
         {
@@ -295,19 +295,42 @@ internal static class Program
         try
         {
             await Until(() => backgroundStatuses.Any(status => status.Contains("translated blocks")), backgroundRun);
+            var stableVisuals = ((Canvas)backgroundOverlay.Content).Children.Cast<UIElement>().ToArray();
+            int completedBeforeAnimation = backgroundStatuses.Count(status => status.Contains("translated blocks"));
             bool hiddenDuringBackgroundAnimation = false;
             backgroundOverlay.IsVisibleChanged += (_, _) => hiddenDuringBackgroundAnimation |= !backgroundOverlay.IsVisible;
             int callsBeforeAnimation = Volatile.Read(ref SpatialOcr.RecognizeCalls);
             int backgroundFrame = 0;
             ScreenCapture.BackgroundProvider = () => Interlocked.Increment(ref backgroundFrame) % 2 == 0 ? 30 : 220;
-            await Until(() => Volatile.Read(ref SpatialOcr.RecognizeCalls) > callsBeforeAnimation, backgroundRun);
+            await Until(() => Volatile.Read(ref SpatialOcr.RecognizeCalls) > callsBeforeAnimation
+                && backgroundStatuses.Count(status => status.Contains("translated blocks")) > completedBeforeAnimation,
+                backgroundRun);
+            await backgroundOverlay.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            var visualsAfterRescan = ((Canvas)backgroundOverlay.Content).Children.Cast<UIElement>().ToArray();
             Require(backgroundOverlay.IsVisible && !hiddenDuringBackgroundAnimation,
                 "Animation outside known text must keep captions visible while periodic rescans remain possible.");
-            Console.WriteLine("PASS: background-only animation keeps captions visible and remains eligible for rescans.");
+            Require(stableVisuals.Length == visualsAfterRescan.Length
+                && stableVisuals.Zip(visualsAfterRescan).All(pair => ReferenceEquals(pair.First, pair.Second)),
+                "A background-only rescan must not repaint an unchanged caption layer.");
+            completedBeforeAnimation = backgroundStatuses.Count(status => status.Contains("translated blocks"));
+            callsBeforeAnimation = Volatile.Read(ref SpatialOcr.RecognizeCalls);
+            ScreenCapture.BackgroundBounds = new Rectangle(180, 110, 12, 12);
+            await Until(() => Volatile.Read(ref SpatialOcr.RecognizeCalls) > callsBeforeAnimation, backgroundRun);
+            completedBeforeAnimation = backgroundStatuses.Count(status => status.Contains("translated blocks"));
+            await Until(() => backgroundStatuses.Count(status => status.Contains("translated blocks")) > completedBeforeAnimation,
+                backgroundRun);
+            await backgroundOverlay.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            var visualsAfterCoveredPixelsChanged = ((Canvas)backgroundOverlay.Content).Children.Cast<UIElement>().ToArray();
+            Require(visualsAfterRescan.Length != visualsAfterCoveredPixelsChanged.Length
+                || visualsAfterRescan.Zip(visualsAfterCoveredPixelsChanged)
+                    .Any(pair => !ReferenceEquals(pair.First, pair.Second)),
+                "Changing pixels used by a source cover must refresh the caption layer.");
+            Console.WriteLine("PASS: unrelated animation keeps captions stable while changed cover pixels repaint them.");
         }
         finally
         {
             ScreenCapture.BackgroundProvider = null;
+            ScreenCapture.BackgroundBounds = new Rectangle(10, 10, 12, 12);
             backgroundCancellation.Cancel();
             try { await backgroundRun; } catch (OperationCanceledException) { } catch (InvalidOperationException) { }
             backgroundOverlay.Close();
@@ -446,6 +469,10 @@ internal static class Program
             await Until(() => LocalTranslator.FirstProgressDelivered.Task.IsCompleted, progressiveRun);
             await progressiveOverlay.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             var partial = ((Canvas)progressiveOverlay.Content).Children;
+            var firstProgressiveCaption = partial.OfType<Border>().Single(border => border.Child is TextBlock);
+            double firstProgressiveLeft = Canvas.GetLeft(firstProgressiveCaption);
+            double firstProgressiveTop = Canvas.GetTop(firstProgressiveCaption);
+            double firstProgressiveFont = ((TextBlock)firstProgressiveCaption.Child).FontSize;
             Require(partial.OfType<System.Windows.Controls.Image>().Count() == 0
                 && partial.OfType<Border>().Count(border => border.Child is null) == 1
                 && partial.OfType<Border>().Count(border => border.Child is TextBlock) == 1
@@ -457,6 +484,13 @@ internal static class Program
             LocalTranslator.ProgressiveGate.SetResult();
             await Until(() => ((Canvas)progressiveOverlay.Content).Children.OfType<Border>()
                 .Count(border => border.Child is TextBlock) == 5, progressiveRun);
+            var completedFirstCaption = ((Canvas)progressiveOverlay.Content).Children.OfType<Border>()
+                .Single(border => border.Tag is 0 && border.Child is TextBlock);
+            Require(ReferenceEquals(firstProgressiveCaption, completedFirstCaption)
+                && Canvas.GetLeft(completedFirstCaption) == firstProgressiveLeft
+                && Canvas.GetTop(completedFirstCaption) == firstProgressiveTop
+                && ((TextBlock)completedFirstCaption.Child).FontSize == firstProgressiveFont,
+                "Later progressive results must not reflow or replace an earlier matching caption.");
             Console.WriteLine("PASS: the first manga caption appears over the live page before the next region finishes.");
         }
         finally
@@ -1110,6 +1144,7 @@ namespace Translumo.Local
         public static int CaptureDelayMs;
         public static Func<int>? MarkerProvider;
         public static Func<int>? BackgroundProvider;
+        public static Rectangle BackgroundBounds = new(10, 10, 12, 12);
         public static TaskCompletionSource? CaptureGate;
         public static TaskCompletionSource? CaptureStarted;
         public static Action<Bitmap>? CaptureObserver;
@@ -1137,6 +1172,17 @@ namespace Translumo.Local
                     ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
                 try { Marshal.Copy(pixels, 0, data.Scan0, pixels.Length); }
                 finally { bitmap.UnlockBits(data); }
+                using (var drawing = Graphics.FromImage(bitmap))
+                {
+                    if (markerValue == 8)
+                    {
+                        drawing.FillRectangle(Brushes.White, 40, 40, 100, 60);
+                        drawing.FillRectangle(Brushes.White, 240, 110, 100, 60);
+                    }
+                    else
+                        for (int index = 0; index < 5; index++)
+                            drawing.FillRectangle(Brushes.White, 24 + index * 115, 94, 97, 57);
+                }
                 if (scrollOffset == 0)
                 {
                     if (ScrollRegionPixelChanged) bitmap.SetPixel(60, 55, Color.Red);
@@ -1148,6 +1194,7 @@ namespace Translumo.Local
                 {
                     drawing.Clear(Color.White);
                     drawing.DrawImageUnscaled(bitmap, 0, scrollOffset);
+                    drawing.FillRectangle(Brushes.White, 410, 240, 100, 60);
                 }
                 if (ScrollCorruptionProvider?.Invoke() == true)
                     scrolled.SetPixel(60, 55 + scrollOffset, Color.Red);
@@ -1168,7 +1215,7 @@ namespace Translumo.Local
                 if (BackgroundProvider is { } background)
                 {
                     using var animation = new SolidBrush(Color.FromArgb(background(), 0, 0));
-                    drawing.FillRectangle(animation, 10, 10, 12, 12);
+                    drawing.FillRectangle(animation, BackgroundBounds);
                 }
                 using var marker = new SolidBrush(Color.FromArgb(markerValue * 30, 0, 0));
                 drawing.FillRectangle(marker, 210, 110, 12, 12);

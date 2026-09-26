@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Translumo.Local;
@@ -17,11 +18,17 @@ internal static class Program
 {
     private static void CheckThaiWrapping()
     {
-        var compactFonts = SubtitleOverlay.CaptionFontSizes(12, 1).ToArray();
-        Require(compactFonts.Max() == 10 && compactFonts.Min() == 8,
-            "A short textbox must search down to readable compact sizes instead of forcing a large generic caption.");
-        Require(SubtitleOverlay.CaptionFontSizes(100, 1).Max() == 24,
+        var compactFonts = SubtitleOverlay.CaptionFontSizes().ToArray();
+        Require(compactFonts.Max() == 24 && compactFonts.Min() == 8,
+            "Caption sizing must consider the full bounded range instead of using source glyph height as its ceiling.");
+        Require(SubtitleOverlay.CaptionFontSizes().Max() == 24,
             "A large textbox may use a larger font, within the caption size limit.");
+        var capture = new Drawing.Rectangle(0, 0, 1000, 700);
+        var source = new Drawing.Rectangle(420, 260, 120, 60);
+        var permitted = SubtitleOverlay.PermittedCaptionArea(source, capture);
+        Require(capture.Contains(permitted) && permitted.Contains(source)
+            && !permitted.Contains(new Drawing.Rectangle(40, 40, 200, 100)),
+            "Overwrite captions need a bounded local area instead of permission to cross unrelated artwork.");
         var text = new TextBlock { FontFamily = new FontFamily("Leelawadee UI"), FontSize = 20,
             Language = System.Windows.Markup.XmlLanguage.GetLanguage("th-TH"), TextWrapping = TextWrapping.NoWrap };
         var segmenters = new[] { (Requested: "th", Value: new Windows.Data.Text.WordsSegmenter("th")),
@@ -56,6 +63,37 @@ internal static class Program
             "Wrapping must preserve spaces as well as Thai graphemes.");
         Require(!SubtitleOverlay.WrapWords(text, new[] { "มหาวิทยาลัย" }, 10),
             "A word wider than the caption must request another width or font size, never split characters.");
+        using (var cancelled = new System.Threading.CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            bool observed = false;
+            try { SubtitleOverlay.WrapWords(text, words, 70, cancellationToken: cancelled.Token); }
+            catch (OperationCanceledException) { observed = true; }
+            Require(observed, "Thai wrapping must observe cancellation before quadratic measurement work.");
+        }
+        var budgetOverlay = new SubtitleOverlay();
+        try
+        {
+            bool regionBudgetObserved = false, textBudgetObserved = false;
+            var tooManyRegions = Enumerable.Range(0, 257)
+                .Select(_ => new TextRegion("source", new Drawing.Rectangle(0, 0, 10, 10))).ToArray();
+            try
+            {
+                budgetOverlay.Render(new Drawing.Rectangle(0, 0, 100, 100), tooManyRegions,
+                    Enumerable.Repeat("caption", tooManyRegions.Length).ToArray(), SubtitleStyle.Overlay);
+            }
+            catch (SubtitleLayoutException) { regionBudgetObserved = true; }
+            try
+            {
+                budgetOverlay.Render(new Drawing.Rectangle(0, 0, 100, 100),
+                    new[] { new TextRegion("source", new Drawing.Rectangle(0, 0, 10, 10)) },
+                    new[] { new string('x', 1_025) }, SubtitleStyle.Overlay);
+            }
+            catch (SubtitleLayoutException) { textBudgetObserved = true; }
+            Require(regionBudgetObserved && textBudgetObserved,
+                "Caption rendering must reject aggregate region and text work beyond its UI-thread budget.");
+        }
+        finally { budgetOverlay.Close(); }
         const string decomposed = "ทํางานอย่างจริงจัง";
         Require(string.Concat(SubtitleOverlay.ThaiWords(decomposed)) == decomposed,
             "Segmentation must preserve decomposed Thai marks instead of silently normalizing the caption.");
@@ -125,7 +163,9 @@ internal static class Program
         }
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         CheckColoredOverwrite();
+        CheckGradientOverwrite();
         CheckTexturedOverwrite();
+        CheckUnsafeMarginFallback();
         CheckDenseMarginFallback();
         CheckReadableVerticalCaption();
         CheckVerticalIndex();
@@ -272,6 +312,13 @@ internal static class Program
             pixels[offset + 2] = 176;
             pixels[offset + 3] = 255;
         }
+        for (int x = 287; x <= 311; x += 12)
+            for (int y = 98; y < 202; y++)
+            for (int stroke = 0; stroke < 3; stroke++)
+            {
+                int offset = (y * width + x + stroke) * 4;
+                pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 245;
+            }
         var frame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
         frame.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
         frame.Freeze();
@@ -282,11 +329,151 @@ internal static class Program
                 new[] { new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)) },
                 new[] { "นี่คือคำแปล" }, SubtitleStyle.Overwrite, 6, frame);
             overlay.UpdateLayout();
-            Require(((Canvas)overlay.Content).Children.OfType<Border>().Any(b => b.Child is TextBlock),
+            var children = ((Canvas)overlay.Content).Children.OfType<Border>().ToArray();
+            Require(children.Any(b => b.Child is TextBlock),
                 "Overwrite must render a caption over a colored manga page.");
-            Require(((Canvas)overlay.Content).Children.OfType<Border>().Where(b => b.Child is TextBlock)
-                .All(b => ((TextBlock)b.Child).Foreground == Brushes.White),
-                "Dark sampled backgrounds must keep Thai captions readable.");
+            var captionBorder = children.Single(b => b.Child is TextBlock);
+            var caption = (TextBlock)captionBorder.Child;
+            Require(caption.Foreground is SolidColorBrush { Color: var color } && color == Colors.Black
+                && caption.Effect is DropShadowEffect { ShadowDepth: 0 },
+                "The default dialogue style must remain readable with its white outline.");
+            Require(ReferenceEquals(captionBorder.Background, Brushes.Transparent),
+                "A qualified color caption must not repaint the full rectangular source mask.");
+            var cover = children.Single(b => b.Child is null && b.Tag is int);
+            double scale = PresentationSource.FromVisual(overlay)!.CompositionTarget!.TransformFromDevice.M11;
+            Require(cover.Width < 52 * scale && cover.Height < 132 * scale,
+                "A qualified color cover must replace only the inferred lettering footprint.");
+
+            var emphasis = CaptionStyles.Resolve(new CaptionStyleOptions(CaptionRole.Emphasis),
+                new[] { "Leelawadee UI" });
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                new[] { new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)) },
+                new[] { "นี่คือคำแปล" }, SubtitleStyle.Overwrite, 6, frame, captionStyle: emphasis);
+            overlay.UpdateLayout();
+            caption = (TextBlock)((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(b => b.Child is TextBlock).Child;
+            Require(caption.FontWeight == FontWeights.Bold
+                && caption.Foreground is SolidColorBrush { Color: var emphasisColor } && emphasisColor == Colors.White
+                && caption.Effect is DropShadowEffect { ShadowDepth: 1 },
+                "The live renderer must apply the emphasis preset and invalidate its caption cache.");
+
+            using var cancelled = new System.Threading.CancellationTokenSource();
+            cancelled.Cancel();
+            bool cancellationObserved = false;
+            try
+            {
+                overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                    new[] { new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)) },
+                    new[] { "นี่คือคำแปล" }, SubtitleStyle.Overwrite, 6, frame,
+                    cancellationToken: cancelled.Token);
+            }
+            catch (OperationCanceledException) { cancellationObserved = true; }
+            Require(cancellationObserved,
+                "The live renderer must pass cancellation through bounded source-cover work.");
+
+            var artworkPixels = new byte[width * height * 4];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                {
+                    int offset = (y * width + x) * 4;
+                    artworkPixels[offset] = 170;
+                    artworkPixels[offset + 1] = 178;
+                    artworkPixels[offset + 2] = 224;
+                    artworkPixels[offset + 3] = 255;
+                }
+            var sourceMask = new Drawing.Rectangle(274, 84, 52, 132);
+            for (int y = sourceMask.Top; y < sourceMask.Bottom; y++)
+                for (int x = sourceMask.Left; x < sourceMask.Right; x++)
+                {
+                    int offset = (y * width + x) * 4;
+                    artworkPixels[offset] = 81; artworkPixels[offset + 1] = 32;
+                    artworkPixels[offset + 2] = 176; artworkPixels[offset + 3] = 255;
+                }
+            for (int x = 287; x <= 311; x += 12)
+                for (int y = 98; y < 202; y++)
+                    for (int stroke = 0; stroke < 3; stroke++)
+                    {
+                        int offset = (y * width + x + stroke) * 4;
+                        artworkPixels[offset] = artworkPixels[offset + 1] = artworkPixels[offset + 2] = 245;
+                    }
+            var artworkFrame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+            artworkFrame.WritePixels(new Int32Rect(0, 0, width, height), artworkPixels, width * 4, 0);
+            artworkFrame.Freeze();
+            var connectorPixels = (byte[])pixels.Clone();
+            for (int x = 1; x < width; x += 2)
+                for (int y = 0; y < height; y++)
+                    if (!sourceMask.Contains(x, y))
+                    {
+                        int offset = (y * width + x) * 4;
+                        connectorPixels[offset] = connectorPixels[offset + 1] = connectorPixels[offset + 2] = 0;
+                    }
+            var connectorFrame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+            connectorFrame.WritePixels(new Int32Rect(0, 0, width, height), connectorPixels, width * 4, 0);
+            connectorFrame.Freeze();
+            var protectedOverlay = new SubtitleOverlay();
+            try
+            {
+                Require(Rejects(artworkFrame),
+                    "A qualified color cover must not authorize caption text over uniform surrounding artwork.");
+                Require(Rejects(connectorFrame),
+                    "A qualified color cover must not authorize caption text across one-pixel panel or chart lines.");
+
+                bool Rejects(BitmapSource candidateFrame)
+                {
+                    try
+                    {
+                        protectedOverlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                            new[] { new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)) },
+                            new[] { "นี่คือคำแปลยาวที่ต้องวางนอกกรอบข้อความเดิมบนหน้าการ์ตูน" },
+                            SubtitleStyle.Overwrite, 6, candidateFrame, japaneseToThai: true);
+                        return false;
+                    }
+                    catch (SubtitleLayoutException)
+                    {
+                        return ((Canvas)protectedOverlay.Content).Children.Count == 0;
+                    }
+                }
+            }
+            finally { protectedOverlay.Close(); }
+
+            var paddedPixels = new byte[width * height * 4];
+            for (int offset = 0; offset < paddedPixels.Length; offset += 4)
+            {
+                paddedPixels[offset] = 81; paddedPixels[offset + 1] = 32;
+                paddedPixels[offset + 2] = 176; paddedPixels[offset + 3] = 255;
+            }
+            for (int x = 250; x <= 340; x += 30)
+                for (int y = 124; y < 147; y++)
+                    for (int stroke = 0; stroke < 3; stroke++)
+                    {
+                        int offset = (y * width + x + stroke) * 4;
+                        paddedPixels[offset] = paddedPixels[offset + 1] = paddedPixels[offset + 2] = 245;
+                    }
+            for (int x = 214; x < 386; x++)
+                foreach (int y in new[] { 115, 154 })
+                {
+                    int offset = (y * width + x) * 4;
+                    paddedPixels[offset] = paddedPixels[offset + 1] = paddedPixels[offset + 2] = 0;
+                }
+            var paddedArtworkFrame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+            paddedArtworkFrame.WritePixels(new Int32Rect(0, 0, width, height), paddedPixels, width * 4, 0);
+            paddedArtworkFrame.Freeze();
+            var paddedOverlay = new SubtitleOverlay();
+            try
+            {
+                bool protectedPadding = false;
+                try
+                {
+                    paddedOverlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                        new[] { new TextRegion("横書き", new Drawing.Rectangle(220, 120, 160, 30)) },
+                        new[] { "นี่คือคำแปลยาวสำหรับกรอบข้อความแนวนอนบนหน้าการ์ตูน" },
+                        SubtitleStyle.Overwrite, 6, paddedArtworkFrame, japaneseToThai: true);
+                }
+                catch (SubtitleLayoutException) { protectedPadding = true; }
+                Require(protectedPadding && ((Canvas)paddedOverlay.Content).Children.Count == 0,
+                    "Cover padding must not authorize captions across one-pixel artwork outside the source footprint.");
+            }
+            finally { paddedOverlay.Close(); }
         }
         finally { overlay.Close(); }
         Console.WriteLine("Colored manga overwrite rendering passed.");
@@ -343,7 +530,63 @@ internal static class Program
         rendered.CopyPixels(actual, mask.Width * 4, 0);
         Require(actual[((108 - mask.Top) * mask.Width + 1) * 4] >= 240,
             "A single dark edge outlier must not smear across an otherwise white speech bubble.");
+        using (var cancelled = new System.Threading.CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            bool observed = false;
+            try { SubtitleOverlay.MaskBrush(mask, new Drawing.Rectangle(0, 0, width, height), pixels, cancelled.Token); }
+            catch (OperationCanceledException) { observed = true; }
+            Require(observed, "Legacy monochrome cover construction must observe cancellation.");
+        }
+        const int oversizedWidth = 1001, oversizedHeight = 1000;
+        bool budgetObserved = false;
+        try
+        {
+            SubtitleOverlay.MaskBrush(new Drawing.Rectangle(0, 0, oversizedWidth, oversizedHeight),
+                new Drawing.Rectangle(0, 0, oversizedWidth, oversizedHeight),
+                new byte[oversizedWidth * oversizedHeight * 4]);
+        }
+        catch (SubtitleLayoutException) { budgetObserved = true; }
+        Require(budgetObserved, "Legacy monochrome covers must share the bounded source-cover pixel budget.");
         Console.WriteLine("Large mask background tracks the page gradient.");
+    }
+
+    private static void CheckGradientOverwrite()
+    {
+        const int width = 600, height = 300;
+        var pixels = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                int offset = (y * width + x) * 4;
+                pixels[offset] = (byte)(80 + y * 20 / (height - 1));
+                pixels[offset + 1] = (byte)(40 + y * 30 / (height - 1));
+                pixels[offset + 2] = (byte)(160 + y * 40 / (height - 1));
+                pixels[offset + 3] = 255;
+            }
+        for (int x = 287; x <= 311; x += 12)
+            for (int y = 98; y < 202; y++)
+                for (int stroke = 0; stroke < 3; stroke++)
+                {
+                    int offset = (y * width + x + stroke) * 4;
+                    pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 245;
+                }
+        var frame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+        frame.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+        frame.Freeze();
+        var overlay = new SubtitleOverlay();
+        try
+        {
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                new[] { new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)) },
+                new[] { "นี่คือคำแปล" }, SubtitleStyle.Overwrite, 6, frame);
+            var children = ((Canvas)overlay.Content).Children.OfType<Border>().ToArray();
+            Require(ReferenceEquals(children.Single(child => child.Child is TextBlock).Background, Brushes.Transparent)
+                && children.Single(child => child.Child is null).Width < 52,
+                "A qualified smooth gradient must use the footprint-only live cover and transparent caption.");
+        }
+        finally { overlay.Close(); }
+        Console.WriteLine("Gradient manga overwrite rendering passed.");
     }
 
     private static void CheckTexturedOverwrite()
@@ -366,17 +609,61 @@ internal static class Program
         var overlay = new SubtitleOverlay();
         try
         {
-            overlay.Render(new Drawing.Rectangle(0, 0, width, height),
-                new[] {
-                    new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)),
-                    new TextRegion("本文", new Drawing.Rectangle(340, 90, 40, 120))
-                },
-                new[] { "นี่คือคำแปล", "ข้อความ" }, SubtitleStyle.Overwrite, 6, frame);
-            Require(((Canvas)overlay.Content).Children.OfType<Border>().Count(b => b.Child is TextBlock) == 2,
-                "Overwrite must render over textured artwork instead of exposing the source text.");
+            bool failed = false;
+            try
+            {
+                overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                    new[] {
+                        new TextRegion("縦書き", new Drawing.Rectangle(280, 90, 40, 120)),
+                        new TextRegion("本文", new Drawing.Rectangle(340, 90, 40, 120))
+                    },
+                    new[] { "นี่คือคำแปล", "ข้อความ" }, SubtitleStyle.Overwrite, 6, frame);
+            }
+            catch (SubtitleLayoutException) { failed = true; }
+            Require(failed && ((Canvas)overlay.Content).Children.Count == 0,
+                "Detailed artwork without a qualified readable container must remain visible.");
         }
         finally { overlay.Close(); }
-        Console.WriteLine("Textured manga overwrite rendering passed.");
+        Console.WriteLine("Textured manga readable-failure fallback passed.");
+    }
+
+    private static void CheckUnsafeMarginFallback()
+    {
+        const int width = 600, height = 500;
+        var pixels = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+            {
+                int offset = (y * width + x) * 4;
+                byte value = x < 200 || x >= 400 ? (byte)112 : (byte)((x + y) % 2 == 0 ? 170 : 230);
+                pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
+            }
+        for (int x = 0; x < width; x++)
+        {
+            int offset = (201 * width + x) * 4;
+            pixels[offset] = 20; pixels[offset + 1] = 30; pixels[offset + 2] = 180;
+        }
+        var frame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+        frame.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+        frame.Freeze();
+        var overlay = new SubtitleOverlay();
+        try
+        {
+            bool failed = false;
+            try
+            {
+                overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                    new[] { new TextRegion("本文", new Drawing.Rectangle(290, 60, 20, 20)) },
+                    new[] { string.Join(" ", Enumerable.Repeat("สวัสดี", 40)) },
+                    SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
+            }
+            catch (SubtitleLayoutException) { failed = true; }
+            Require(failed && ((Canvas)overlay.Content).Children.Count == 0,
+                "A thin connector missed by the coarse margin scan must keep the margin source visible.");
+        }
+        finally { overlay.Close(); }
+        Console.WriteLine("Unsafe margin connector fallback passed.");
     }
 
     private static void CheckDenseMarginFallback()
@@ -439,14 +726,21 @@ internal static class Program
             var marginsField = typeof(SubtitleOverlay).GetField("plainMargins",
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
             var cachedMargins = (Drawing.Rectangle[]?)marginsField.GetValue(overlay);
+            var cachedCaptionVisuals = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Where(border => border.Child is TextBlock).ToDictionary(
+                    border => ((int)border.Tag, border.Uid), border => border);
             overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
             Require(cachedMargins is not null && ReferenceEquals(cachedMargins, marginsField.GetValue(overlay)),
                 "An unchanged frozen manga frame must reuse its plain-margin scan.");
+            Require(((Canvas)overlay.Content).Children.OfType<Border>()
+                .Where(border => border.Child is TextBlock).All(border =>
+                    ReferenceEquals(cachedCaptionVisuals[((int)border.Tag, border.Uid)], border)),
+                "An unchanged dense page must reuse local captions, margin captions, and their badges.");
 
             overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 7, frame, japaneseToThai: true);
             var paddedMargins = (Drawing.Rectangle[]?)marginsField.GetValue(overlay);
             Require(paddedMargins is not null && !ReferenceEquals(cachedMargins, paddedMargins),
-                "Changed padding must invalidate the plain-margin scan.");
+                "Changed cover padding must revalidate available margin space.");
 
             overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
             var regionBaseline = (Drawing.Rectangle[]?)marginsField.GetValue(overlay);
@@ -492,6 +786,16 @@ internal static class Program
                 && border.Child is TextBlock).ToArray();
             Require(captions.Length == translations.Count, "Dense fallback must preserve every Thai translation.");
             double deviceScale = PresentationSource.FromVisual(overlay)!.CompositionTarget!.TransformFromDevice.M11;
+            var desktopBounds = Forms.SystemInformation.VirtualScreen;
+            Drawing.Rectangle VisualBounds(Border border) => new(
+                (int)Math.Round(Canvas.GetLeft(border) / deviceScale + desktopBounds.Left),
+                (int)Math.Round(Canvas.GetTop(border) / deviceScale + desktopBounds.Top),
+                (int)Math.Round(border.Width / deviceScale), (int)Math.Round(border.Height / deviceScale));
+            Require(allBorders.All(border => capture.Contains(VisualBounds(border))),
+                "Dense source covers, captions, and association badges must stay inside the capture target.");
+            Require(captions.Select((caption, index) => (caption, index)).All(item =>
+                captions.Skip(item.index + 1).All(other => !VisualBounds(item.caption).IntersectsWith(VisualBounds(other)))),
+                "Dense local and margin captions must not collide.");
             var badges = allBorders.Where(border => border.Uid == "association-badge").ToArray();
             var overflowTags = badges.Select(badge => (int)badge.Tag).ToHashSet();
             var overflowCaptions = captions.Where(border => overflowTags.Contains((int)border.Tag)).ToArray();
@@ -609,13 +913,18 @@ internal static class Program
             var noMarginFrame = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
             noMarginFrame.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
             noMarginFrame.Freeze();
-            overlay.Render(new Drawing.Rectangle(0, 0, width, height),
-                new[] { new TextRegion("vertical", new Drawing.Rectangle(480, 250, 38, 108)) },
-                new[] { "\u0e17\u0e23\u0e07\u0e1c\u0e21\u0e22\u0e32\u0e27\u0e02\u0e2d\u0e07\u0e1e\u0e23\u0e30\u0e19\u0e32\u0e07\u0e1a\u0e34\u0e2a\u0e40\u0e1a\u0e30" },
-                SubtitleStyle.Overwrite, 6, noMarginFrame, japaneseToThai: true);
-            Require(((Canvas)overlay.Content).Children.OfType<Border>()
-                .Any(border => border.Child is TextBlock && border.Uid != "association-badge"),
-                "A page without a usable margin must still show its translation.");
+            overlay.Clear();
+            bool noMarginFailed = false;
+            try
+            {
+                overlay.Render(new Drawing.Rectangle(0, 0, width, height),
+                    new[] { new TextRegion("vertical", new Drawing.Rectangle(480, 250, 38, 108)) },
+                    new[] { "\u0e17\u0e23\u0e07\u0e1c\u0e21\u0e22\u0e32\u0e27\u0e02\u0e2d\u0e07\u0e1e\u0e23\u0e30\u0e19\u0e32\u0e07\u0e1a\u0e34\u0e2a\u0e40\u0e1a\u0e30" },
+                    SubtitleStyle.Overwrite, 6, noMarginFrame, japaneseToThai: true);
+            }
+            catch (SubtitleLayoutException) { noMarginFailed = true; }
+            Require(noMarginFailed && ((Canvas)overlay.Content).Children.Count == 0,
+                "A page without a readable local or margin fit must leave its source visible.");
 
             var roomyRegions = new[] { new TextRegion("short", new Drawing.Rectangle(350, 450, 160, 50)) };
             var roomyTranslations = new[] { "\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35" };
@@ -629,6 +938,128 @@ internal static class Program
                 .Single(border => border.Child is TextBlock);
             Require(ReferenceEquals(firstCaption, repeatedCaption),
                 "A partial update must reuse unchanged caption layout on the same page.");
+
+            double firstLeft = Canvas.GetLeft(firstCaption), firstTop = Canvas.GetTop(firstCaption);
+            var firstText = (TextBlock)firstCaption.Child;
+            var firstCover = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(border => border.Child is null);
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height), roomyRegions,
+                roomyTranslations, SubtitleStyle.Overwrite, 20, frame, japaneseToThai: true);
+            var paddedCaption = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(border => border.Child is TextBlock);
+            var paddedCover = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(border => border.Child is null);
+            Require(!ReferenceEquals(firstCaption, paddedCaption)
+                && Canvas.GetLeft(paddedCaption) == firstLeft && Canvas.GetTop(paddedCaption) == firstTop
+                && paddedCaption.Width == firstCaption.Width && paddedCaption.Height == firstCaption.Height
+                && ((TextBlock)paddedCaption.Child).FontSize == firstText.FontSize
+                && ((TextBlock)paddedCaption.Child).Text == firstText.Text
+                && (paddedCover.Width != firstCover.Width || paddedCover.Height != firstCover.Height),
+                "Cover padding must revalidate paint while preserving caption anchor, size, font, and wrapping.");
+
+            var equivalentRegions = roomyRegions.Select(region => region with { }).ToArray();
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height), equivalentRegions,
+                roomyTranslations, SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
+            var equivalentCaption = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(border => border.Child is TextBlock);
+            Require(Canvas.GetLeft(equivalentCaption) == firstLeft && Canvas.GetTop(equivalentCaption) == firstTop
+                && equivalentCaption.Width == firstCaption.Width && equivalentCaption.Height == firstCaption.Height
+                && ((TextBlock)equivalentCaption.Child).FontSize == firstText.FontSize
+                && ((TextBlock)equivalentCaption.Child).Text == firstText.Text,
+                "Equivalent source geometry must reuse the measured caption layout values.");
+
+            var wrappedField = typeof(SubtitleOverlay).GetField("wrappedCache",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            int wrappedCount = ((System.Collections.IDictionary)wrappedField.GetValue(overlay)!).Count;
+            var equivalentFrame = (BitmapSource)frame.Clone();
+            equivalentFrame.Freeze();
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height), equivalentRegions,
+                roomyTranslations, SubtitleStyle.Overwrite, 6, equivalentFrame, japaneseToThai: true);
+            var equivalentFrameCaption = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(border => border.Child is TextBlock);
+            Require(Canvas.GetLeft(equivalentFrameCaption) == firstLeft
+                && Canvas.GetTop(equivalentFrameCaption) == firstTop
+                && equivalentFrameCaption.Width == firstCaption.Width
+                && equivalentFrameCaption.Height == firstCaption.Height
+                && ((System.Collections.IDictionary)wrappedField.GetValue(overlay)!).Count == wrappedCount,
+                "Equivalent captured-view pixels must reuse value-based layout without rewrapping text.");
+
+            var englishTranslations = new[] { "A translated English caption that wraps cleanly" };
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height), roomyRegions,
+                englishTranslations, SubtitleStyle.Overwrite, 6, frame);
+            var englishFirst = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(border => border.Child is TextBlock);
+            var englishFrame = (BitmapSource)frame.Clone();
+            englishFrame.Freeze();
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height), roomyRegions,
+                englishTranslations, SubtitleStyle.Overwrite, 6, englishFrame);
+            var englishSecond = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(border => border.Child is TextBlock);
+            Require(((TextBlock)englishFirst.Child).TextWrapping == TextWrapping.Wrap
+                && ((TextBlock)englishSecond.Child).TextWrapping == TextWrapping.Wrap
+                && englishSecond.Width == englishFirst.Width && englishSecond.Height == englishFirst.Height,
+                "Equivalent frames must preserve non-Thai wrapping and caption geometry.");
+
+            var changedBounds = new Drawing.Rectangle(0, 0, width - 1, height);
+            var changedFrame = new CroppedBitmap(frame, new Int32Rect(0, 0, width - 1, height));
+            changedFrame.Freeze();
+            overlay.Render(changedBounds, equivalentRegions, roomyTranslations,
+                SubtitleStyle.Overwrite, 6, changedFrame, japaneseToThai: true);
+            var resizedCaption = ((Canvas)overlay.Content).Children.OfType<Border>()
+                .Single(border => border.Child is TextBlock);
+            Require(!ReferenceEquals(firstCaption, resizedCaption),
+                "Changed available reading space must invalidate cached caption layout.");
+
+            var edgeRegion = new[] { new TextRegion("edge", new Drawing.Rectangle(width - 8, 200, 8, 40)) };
+            overlay.Render(new Drawing.Rectangle(0, 0, width, height), edgeRegion,
+                new[] { "\u0e02\u0e2d\u0e1a\u0e04\u0e38\u0e13" }, SubtitleStyle.Overwrite, 20, frame, japaneseToThai: true);
+            Require(((Canvas)overlay.Content).Children.OfType<Border>().All(border => {
+                int left = (int)Math.Round(Canvas.GetLeft(border));
+                int top = (int)Math.Round(Canvas.GetTop(border));
+                return left >= 0 && top >= 0 && left + border.Width <= width && top + border.Height <= height;
+            }), "Source covers, captions, and badges must remain inside the capture target.");
+
+            var impossibleOverlay = new SubtitleOverlay();
+            try
+            {
+                var tinyFrame = new WriteableBitmap(100, 60, 96, 96, PixelFormats.Bgra32, null);
+                var tinyPixels = Enumerable.Repeat((byte)255, 100 * 60 * 4).ToArray();
+                tinyFrame.WritePixels(new Int32Rect(0, 0, 100, 60), tinyPixels, 100 * 4, 0);
+                tinyFrame.Freeze();
+                bool failed = false;
+                try
+                {
+                    impossibleOverlay.Render(new Drawing.Rectangle(0, 0, 100, 60),
+                        new[] { new TextRegion("tiny", new Drawing.Rectangle(45, 25, 10, 10)) },
+                        new[] { string.Concat(Enumerable.Repeat("\u0e21\u0e2b\u0e32\u0e27\u0e34\u0e17\u0e22\u0e32\u0e25\u0e31\u0e22", 20)) },
+                        SubtitleStyle.Overwrite, 6, tinyFrame, japaneseToThai: true);
+                }
+                catch (SubtitleLayoutException) { failed = true; }
+                Require(failed && ((Canvas)impossibleOverlay.Content).Children.Count == 0,
+                    "An impossible Thai caption must leave source visible instead of bypassing the 12-DIP floor.");
+            }
+            finally { impossibleOverlay.Close(); }
+
+            var universalFloorOverlay = new SubtitleOverlay();
+            try
+            {
+                var lowFrame = new WriteableBitmap(100, 28, 96, 96, PixelFormats.Bgra32, null);
+                var lowPixels = Enumerable.Repeat((byte)255, 100 * 28 * 4).ToArray();
+                lowFrame.WritePixels(new Int32Rect(0, 0, 100, 28), lowPixels, 100 * 4, 0);
+                lowFrame.Freeze();
+                bool failed = false;
+                try
+                {
+                    universalFloorOverlay.Render(new Drawing.Rectangle(0, 0, 100, 28),
+                        new[] { new TextRegion("thai", new Drawing.Rectangle(30, 9, 40, 10)) },
+                        new[] { "\u0e02\u0e2d\u0e1a\u0e04\u0e38\u0e13" }, SubtitleStyle.Overwrite, 0, lowFrame);
+                }
+                catch (SubtitleLayoutException) { failed = true; }
+                Require(failed && ((Canvas)universalFloorOverlay.Content).Children.Count == 0,
+                    "Every Thai caption must use the 12-DIP floor even outside Japanese-to-Thai mode.");
+            }
+            finally { universalFloorOverlay.Close(); }
+
             roomyTranslations[0] = "\u0e02\u0e2d\u0e1a\u0e04\u0e38\u0e13";
             overlay.Render(new Drawing.Rectangle(0, 0, width, height), roomyRegions,
                 roomyTranslations, SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
@@ -647,12 +1078,15 @@ internal static class Program
             overlay.Render(new Drawing.Rectangle(0, 0, width, height),
                 new[] { new TextRegion("...", new Drawing.Rectangle(480, 250, 3, 3)) },
                 new[] { "..." }, SubtitleStyle.Overwrite, 6, frame, japaneseToThai: true);
-            Require(((Canvas)overlay.Content).Children.OfType<Border>()
-                    .Any(border => border.Tag is 0 && border.Uid != "association-badge"
-                        && border.Child is TextBlock text && text.Text == "1. ...")
-                && ((Canvas)overlay.Content).Children.OfType<Border>()
-                    .Any(border => border.Tag is 0 && border.Uid == "association-badge"),
-                "A punctuation-only translation must remain intact in the side-margin fallback.");
+            var punctuationBorders = ((Canvas)overlay.Content).Children.OfType<Border>().ToArray();
+            var punctuationCaption = punctuationBorders.Single(border => border.Tag is 0
+                && border.Uid != "association-badge" && border.Child is TextBlock);
+            string punctuationText = ((TextBlock)punctuationCaption.Child).Text;
+            bool numbered = punctuationText == "1. ...";
+            Require((punctuationText == "..." || numbered)
+                && ((TextBlock)punctuationCaption.Child).FontSize >= 12
+                && punctuationBorders.Any(border => border.Tag is 0 && border.Uid == "association-badge") == numbered,
+                "A punctuation-only translation must remain complete at the readable floor with a paired badge when margined.");
         }
         finally { overlay.Close(); }
     }

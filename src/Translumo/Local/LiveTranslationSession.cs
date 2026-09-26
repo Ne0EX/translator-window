@@ -32,9 +32,11 @@ public sealed class LiveTranslationSession
             = (translator, overlay, status, ocr ?? new SpatialOcr(), navigation);
 
     public async Task RunAsync(Func<Rectangle?> getBounds, string source, string target,
-        SubtitleStyle style, int padding, CancellationToken token, bool hideOriginals = false)
+        SubtitleStyle style, int padding, CancellationToken token, bool hideOriginals = false,
+        CaptionStyleOptions? captionStyle = null)
     {
         using var captureSession = new ScreenCapture.Session();
+        var captionProfile = CaptionStyles.ResolveInstalled(captionStyle ?? new CaptionStyleOptions());
         bool progressiveManga = hideOriginals && style == SubtitleStyle.Overwrite;
         var warmup = _translator.TranslateAsync(Array.Empty<string>(), source, target, token);
         Task layoutWarmup = Task.CompletedTask;
@@ -229,7 +231,8 @@ public sealed class LiveTranslationSession
                                 {
                                     _overlay.Render(held.Bounds, held.Regions, held.Translations, style, padding,
                                         held.Frame, source.Split('-', 2)[0] == "ja" && target == "th",
-                                        allowMissingTranslations: stableTranslation is null);
+                                        allowMissingTranslations: stableTranslation is null, captionStyle: captionProfile,
+                                        cancellationToken: token);
                                     _overlay.ConfirmRender();
                                     int translated = held.Translations.Count(value => !string.IsNullOrWhiteSpace(value));
                                     _status($"Captions restored after scrolling · {translated} translated blocks.");
@@ -312,6 +315,18 @@ public sealed class LiveTranslationSession
                             }
                             if (result is not null && result.Version == _version && resultMatches)
                             {
+                                bool captionsUnchanged = stableTranslation is not null
+                                    && stableTranslation.Bounds == result.Bounds
+                                    && stableTranslation.Regions.SequenceEqual(result.Regions)
+                                    && stableTranslation.Translations.SequenceEqual(result.Translations, StringComparer.Ordinal);
+                                if (captionsUnchanged)
+                                    captionsUnchanged = await _overlay.UnderlyingVisualPixelsMatchAsync(result.Bounds,
+                                        stableTranslation!.Frame, result.Frame, token);
+                                if (token.IsCancellationRequested || result.Version != _version
+                                    || _navigation is { } navigationAfterPixelCheck
+                                    && (navigationAfterPixelCheck.Generation != navigationGeneration
+                                        || navigationAfterPixelCheck.IsActive))
+                                    continue;
                                 if (captionsSuppressedForMotion)
                                 {
                                     motionTranslation = null;
@@ -325,8 +340,10 @@ public sealed class LiveTranslationSession
                                 {
                                     motionTranslation = null;
                                     var layoutTimer = Stopwatch.StartNew();
-                                    _overlay.Render(result.Bounds, result.Regions, result.Translations, style, padding,
-                                        result.Frame, source.Split('-', 2)[0] == "ja" && target == "th");
+                                    if (!captionsUnchanged)
+                                        _overlay.Render(result.Bounds, result.Regions, result.Translations, style, padding,
+                                            result.Frame, source.Split('-', 2)[0] == "ja" && target == "th",
+                                            captionStyle: captionProfile, cancellationToken: token);
                                     layoutTimer.Stop();
                                     _overlay.ConfirmRender();
                                     stableRegions = result.RegionFingerprints;
@@ -343,6 +360,7 @@ public sealed class LiveTranslationSession
                                 catch (SubtitleLayoutException error) when (error.BackgroundRejected
                                     && style == SubtitleStyle.Overwrite && hideOriginals)
                                 {
+                                    _overlay.Clear();
                                     _status(error.Message + " Waiting for a readable frame.");
                                 }
                                 catch (SubtitleLayoutException error)
@@ -376,7 +394,8 @@ public sealed class LiveTranslationSession
                                 stableTranslation, progressiveManga || stableTranslation is null,
                                 capture.ElapsedMs, hash, lastScanStarted, frame => recognizedFrame = frame,
                                 frame => recognizedFrame is { } current && current.Version == _version
-                                    && ReferenceEquals(current.Frame, frame) && !captionsSuppressedForMotion, warmup);
+                                    && ReferenceEquals(current.Frame, frame) && !captionsSuppressedForMotion,
+                                warmup, captionProfile);
                         }
                         if (frameChanged)
                         {
@@ -516,7 +535,8 @@ public sealed class LiveTranslationSession
         string source, string target, SubtitleStyle style, int padding, CancellationToken token,
         bool hideOriginals, TranslatedFrame? reusableTranslation, bool renderProvisionalMasks,
         long captureMs, byte[] frameHash, long scanStarted,
-        Action<TranslatedFrame> recognized, Func<BitmapSource?, bool> provisionalCurrent, Task translatorReady)
+        Action<TranslatedFrame> recognized, Func<BitmapSource?, bool> provisionalCurrent, Task translatorReady,
+        CaptionStyleProfile captionProfile)
     {
         using (bitmap)
         {
@@ -546,7 +566,8 @@ public sealed class LiveTranslationSession
                 try
                 {
                     _overlay.Render(bounds, currentRegions, currentTranslations, style, padding, frame,
-                        source.Split('-', 2)[0] == "ja" && target == "th", allowMissingTranslations: true);
+                        source.Split('-', 2)[0] == "ja" && target == "th", allowMissingTranslations: true,
+                        captionStyle: captionProfile, cancellationToken: token);
                 }
                 catch (SubtitleLayoutException)
                 {
@@ -681,7 +702,7 @@ public sealed class LiveTranslationSession
                     try
                     {
                         _overlay.Render(bounds, regions, regions.Select(_ => "\u2026").ToArray(),
-                            style, padding, frame);
+                            style, padding, frame, captionStyle: captionProfile, cancellationToken: token);
                     }
                     catch (SubtitleLayoutException) { /* Continue translating; the final caption may fit differently. */ }
                 });
@@ -710,7 +731,11 @@ public sealed class LiveTranslationSession
                     .ToDictionary(group => group.Key, group => group.First().Translation, StringComparer.Ordinal);
                 for (int i = 0; i < regions.Count; i++)
                     if (known.TryGetValue(regions[i].Text, out var translation)) translations[i] = translation;
+                bool hasPendingRegions = regions.Select((region, index) => (Region: region, Index: index))
+                    .Where(item => !string.IsNullOrWhiteSpace(item.Region.Text)
+                        && string.IsNullOrWhiteSpace(translations[item.Index])).Any();
                 if (renderProvisionalMasks && version == _version && !token.IsCancellationRequested
+                    && hasPendingRegions
                     && translations.Any(translation => !string.IsNullOrWhiteSpace(translation)))
                 {
                     try
@@ -719,7 +744,8 @@ public sealed class LiveTranslationSession
                         {
                             if (version != _version || token.IsCancellationRequested || !provisionalCurrent(frame)) return;
                             _overlay.Render(bounds, regions, translations, style, padding, frame,
-                                source.Split('-', 2)[0] == "ja" && target == "th", allowMissingTranslations: true);
+                                source.Split('-', 2)[0] == "ja" && target == "th", allowMissingTranslations: true,
+                                captionStyle: captionProfile, cancellationToken: token);
                         });
                     }
                     catch (SubtitleLayoutException)

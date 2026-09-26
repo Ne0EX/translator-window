@@ -2,23 +2,27 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Threading;
 
 namespace Translumo.Local;
 
 internal static class SubtitleLayout
 {
-    internal static Rectangle? FindPlainMargin(Rectangle capture, IReadOnlyList<Rectangle> masks, byte[] pixels)
+    internal static Rectangle? FindPlainMargin(Rectangle capture, IReadOnlyList<Rectangle> masks, byte[] pixels,
+        CancellationToken cancellationToken = default)
     {
         if (pixels.Length != (long)capture.Width * capture.Height * 4) return null;
         int widest = Math.Min(360, capture.Width / 3);
         for (int width = widest / 20 * 20; width >= 120; width -= 20)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Rectangle? best = null;
             foreach (int left in new[] { capture.Right - width, capture.Left })
             {
                 int runTop = -1;
                 for (int y = capture.Top; y <= capture.Bottom; y += 4)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var row = new Rectangle(left, y, width, Math.Min(4, capture.Bottom - y));
                     bool plain = row.Height > 0 && !masks.Any(mask => mask.IntersectsWith(row));
                     int minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
@@ -49,12 +53,13 @@ internal static class SubtitleLayout
         return null;
     }
 
-    internal static Rectangle[] FindPlainMargins(Rectangle capture, IReadOnlyList<Rectangle> masks, byte[] pixels)
+    internal static Rectangle[] FindPlainMargins(Rectangle capture, IReadOnlyList<Rectangle> masks, byte[] pixels,
+        CancellationToken cancellationToken = default)
     {
-        var first = FindPlainMargin(capture, masks, pixels);
+        var first = FindPlainMargin(capture, masks, pixels, cancellationToken);
         if (first is null) return Array.Empty<Rectangle>();
         var blockers = masks.Append(first.Value).ToArray();
-        var second = FindPlainMargin(capture, blockers, pixels);
+        var second = FindPlainMargin(capture, blockers, pixels, cancellationToken);
         return second is null ? new[] { first.Value } : new[] { first.Value, second.Value };
     }
 

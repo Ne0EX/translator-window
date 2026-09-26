@@ -18,6 +18,11 @@ public sealed class LocalWindow : Window
 {
     private readonly ComboBox mode = new() { ItemsSource = new[] { "Selected area", "Window", "Screen" }, SelectedIndex = 0 };
     private readonly ComboBox style = new() { ItemsSource = new[] { "Subtitle overlay — beside text", "Subtitle overwrite — cover text" }, SelectedIndex = 1 };
+    private readonly ComboBox captionRole = new() { ItemsSource = Enum.GetValues<CaptionRole>(), SelectedItem = CaptionRole.Auto };
+    private readonly ComboBox captionTypeface = new() { ItemsSource = ThaiTypefaces, SelectedIndex = 0 };
+    private readonly ComboBox captionWeight = new() { ItemsSource = Enum.GetValues<CaptionWeight>(), SelectedItem = CaptionWeight.Normal };
+    private readonly TextBox captionForeground = new() { Text = "#FF000000" };
+    private readonly ComboBox captionEffect = new() { ItemsSource = Enum.GetValues<CaptionEffect>(), SelectedItem = CaptionEffect.Outline };
     private readonly ComboBox source = new() { ItemsSource = Languages, DisplayMemberPath = "Name", SelectedValuePath = "Code", SelectedValue = "ja" };
     private readonly ComboBox target = new() { ItemsSource = Languages, DisplayMemberPath = "Name", SelectedValuePath = "Code", SelectedValue = "th" };
     private readonly ComboBox windows = new() { DisplayMemberPath = "Title", MinWidth = 240 };
@@ -41,6 +46,7 @@ public sealed class LocalWindow : Window
     {
         new("ja", "Japanese"), new("ko", "Korean"), new("en", "English"), new("th", "Thai")
     };
+    private static readonly string[] ThaiTypefaces = AvailableThaiTypefaces();
 
     public LocalWindow()
     {
@@ -68,6 +74,11 @@ public sealed class LocalWindow : Window
         AddField("Source language", source); settings.Children.Add(comics);
         AddField("Translate to", target);
         AddField("Subtitle style", style);
+        AddField("Caption preset", captionRole);
+        AddField("Thai typeface", captionTypeface);
+        AddField("Caption weight", captionWeight);
+        AddField("Foreground color (#RRGGBB or #AARRGGBB)", captionForeground);
+        AddField("Outline / shadow", captionEffect);
         AddField("Cover padding (0–30 pixels)", padding);
         var modelSettings = new StackPanel();
         modelSettings.Children.Add(new TextBlock { Text = "Python runtime" }); modelSettings.Children.Add(python);
@@ -76,6 +87,7 @@ public sealed class LocalWindow : Window
         python.Text = Path.Combine(root, ".venv", "Scripts", "python.exe");
         model.Text = Path.Combine(root, "models", "hy-mt2");
         LoadSettings();
+        captionRole.SelectionChanged += (_, _) => ApplyCaptionPreset();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 16) };
         buttons.Children.Add(start); buttons.Children.Add(stop); panel.Children.Add(buttons); panel.Children.Add(status);
         panel.Children.Add(new TextBlock { Text = "Keep reading and scrolling while translated captions appear.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, Margin = new Thickness(0, 10, 0, 0) });
@@ -188,7 +200,8 @@ public sealed class LocalWindow : Window
                 new WindowInteropHelper(this).Handle, overlayWindow);
             var session = new LiveTranslationSession(translator, overlay, text => status.Text = text, ocr, navigation);
             await session.RunAsync(getBounds, sourceCode, (string)target.SelectedValue,
-                style.SelectedIndex == 0 ? SubtitleStyle.Overlay : SubtitleStyle.Overwrite, (int)padding.Value, cancellation.Token, hideOriginals);
+                style.SelectedIndex == 0 ? SubtitleStyle.Overlay : SubtitleStyle.Overwrite, (int)padding.Value,
+                cancellation.Token, hideOriginals, SelectedCaptionStyle);
         }
         catch (OperationCanceledException) { status.Text = "Translation stopped."; }
         catch (Exception error) { status.Text = error.Message; }
@@ -210,12 +223,19 @@ public sealed class LocalWindow : Window
 
     private string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TranslumoLocal", "settings.json");
 
+    internal CaptionStyleOptions SelectedCaptionStyle => new(
+        captionRole.SelectedItem is CaptionRole role ? role : CaptionRole.Dialogue,
+        captionTypeface.SelectedItem as string,
+        captionWeight.SelectedItem is CaptionWeight weight ? weight : null,
+        captionForeground.Text,
+        captionEffect.SelectedItem is CaptionEffect effect ? effect : null);
+
     private void LoadSettings()
     {
         try
         {
             if (!File.Exists(SettingsPath)) return;
-            var saved = JsonSerializer.Deserialize<SavedSettings>(File.ReadAllText(SettingsPath));
+            var saved = JsonSerializer.Deserialize<LocalWindowSettings>(File.ReadAllText(SettingsPath));
             if (saved is null) return;
             if (Languages.Any(l => l.Code == saved.Source)) source.SelectedValue = saved.Source;
             if (Languages.Any(l => l.Code == saved.Target)) target.SelectedValue = saved.Target;
@@ -223,6 +243,12 @@ public sealed class LocalWindow : Window
             if (!string.IsNullOrWhiteSpace(saved.Model)) model.Text = saved.Model;
             style.SelectedIndex = saved.Overwrite ? 1 : 0; comics.IsChecked = saved.Comics;
             padding.Value = Math.Clamp(saved.Padding, 0, 30);
+            if (Enum.TryParse(saved.CaptionRole, true, out CaptionRole role)) captionRole.SelectedItem = role;
+            if (ThaiTypefaces.Contains(saved.CaptionTypeface, StringComparer.OrdinalIgnoreCase))
+                captionTypeface.SelectedItem = ThaiTypefaces.First(name => name.Equals(saved.CaptionTypeface, StringComparison.OrdinalIgnoreCase));
+            if (Enum.TryParse(saved.CaptionWeight, true, out CaptionWeight weight)) captionWeight.SelectedItem = weight;
+            if (!string.IsNullOrWhiteSpace(saved.CaptionForeground)) captionForeground.Text = saved.CaptionForeground;
+            if (Enum.TryParse(saved.CaptionEffect, true, out CaptionEffect effect)) captionEffect.SelectedItem = effect;
         }
         catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
         { status.Text = "Saved settings could not be read. Using defaults."; }
@@ -233,8 +259,12 @@ public sealed class LocalWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            var text = JsonSerializer.Serialize(new SavedSettings((string)source.SelectedValue, (string)target.SelectedValue,
-                python.Text, model.Text, style.SelectedIndex == 1, (int)padding.Value, comics.IsChecked == true));
+            var caption = SelectedCaptionStyle;
+            var text = JsonSerializer.Serialize(new LocalWindowSettings((string)source.SelectedValue, (string)target.SelectedValue,
+                python.Text, model.Text, style.SelectedIndex == 1, (int)padding.Value, comics.IsChecked == true,
+                caption.Role.ToString(), caption.Typeface ?? "Leelawadee UI",
+                (caption.Weight ?? CaptionWeight.Normal).ToString(), captionForeground.Text,
+                (caption.Effect ?? CaptionEffect.Outline).ToString()));
             File.WriteAllText(SettingsPath + ".tmp", text);
             File.Move(SettingsPath + ".tmp", SettingsPath, true);
         }
@@ -243,7 +273,24 @@ public sealed class LocalWindow : Window
     }
 
     private sealed record LanguageChoice(string Code, string Name);
-    private sealed record SavedSettings(string Source, string Target, string Python, string Model, bool Overwrite, int Padding, bool Comics = true);
+
+    private void ApplyCaptionPreset()
+    {
+        var profile = CaptionStyles.Resolve(new CaptionStyleOptions(
+            captionRole.SelectedItem is CaptionRole role ? role : CaptionRole.Dialogue), ThaiTypefaces);
+        captionTypeface.SelectedItem = profile.Typeface;
+        captionWeight.SelectedItem = profile.Weight == FontWeights.Bold ? CaptionWeight.Bold
+            : profile.Weight == FontWeights.SemiBold ? CaptionWeight.SemiBold : CaptionWeight.Normal;
+        captionForeground.Text = profile.Foreground.ToString();
+        captionEffect.SelectedItem = profile.Effect;
+    }
+
+    private static string[] AvailableThaiTypefaces()
+    {
+        var installed = Fonts.SystemFontFamilies.Select(font => font.Source).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var supported = new[] { "Leelawadee UI", "Tahoma", "Segoe UI" }.Where(installed.Contains).ToArray();
+        return supported.Length == 0 ? new[] { "Leelawadee UI" } : supported;
+    }
 }
 
 internal static class NativePosition

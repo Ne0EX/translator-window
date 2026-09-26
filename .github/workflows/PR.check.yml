@@ -35,3 +35,12 @@ jobs:
 
     - name: Check live layout and cancellation
       run: dotnet run --project tests/layout-hold/LayoutHoldCheck.csproj --configuration Release
+
+    - name: Check deterministic caption replay
+      run: dotnet run --project tests/replay/ReplayCheck.csproj --configuration Release
+
+    - name: Check color covers and caption styles
+      run: dotnet run --project tests/color-style/ColorStyleCheck.csproj --configuration Release
+
+    - name: Check scroll alignment
+      run: dotnet run --project tests/scroll-alignment/ScrollAlignmentCheck.csproj --configuration Release

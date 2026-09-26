@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
@@ -12,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Markup;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using Drawing = System.Drawing;
 using Forms = System.Windows.Forms;
@@ -30,6 +32,28 @@ public sealed class SubtitleLayoutException : InvalidOperationException
 
 public sealed class SubtitleOverlay : Window
 {
+    private const int MaxCaptionRegions = 256;
+    private const int MaxCaptionLength = 1_024;
+    private const long MaxTextLayoutWork = 1_000_000;
+    private const long MaxCoverPixels = 4_000_000;
+    private const int MaxPlacementChecks = 16_384;
+    private const long MaxBackgroundPixelSamples = 32_000_000;
+    private sealed class RenderWorkBudget
+    {
+        private int placementChecks;
+        private long backgroundPixelSamples;
+
+        public void CheckPlacement()
+        {
+            if (++placementChecks > MaxPlacementChecks) throw new SubtitleLayoutException();
+        }
+
+        public void SampleBackgroundRow(int width)
+        {
+            backgroundPixelSamples += width;
+            if (backgroundPixelSamples > MaxBackgroundPixelSamples) throw new SubtitleLayoutException();
+        }
+    }
     private readonly Canvas canvas = new() { ClipToBounds = true, IsHitTestVisible = false };
     private UIElement[]? rollbackChildren;
     private BitmapSource? layoutFrame;
@@ -38,15 +62,20 @@ public sealed class SubtitleOverlay : Window
     private BitmapSource? maskFrame;
     private Drawing.Rectangle maskCapture;
     private readonly Dictionary<Drawing.Rectangle, Brush> maskCache = new();
+    private readonly Dictionary<(Drawing.Rectangle Source, Drawing.Rectangle Mask),
+        (Brush Patch, Drawing.Rectangle Bounds, Brush Caption, Color Background)?> sourceCoverCache = new();
     private Drawing.Rectangle plainMarginCapture;
     private Drawing.Rectangle[]? plainMarginMasks;
     private Drawing.Rectangle[]? plainMargins;
     private BitmapSource? captionFrame;
-    private IReadOnlyList<TextRegion>? captionRegions;
-    private (Drawing.Rectangle Capture, SubtitleStyle Style, int Padding, bool JapaneseToThai,
-        double ScaleX, double ScaleY) captionOptions;
-    private readonly Dictionary<int, (string Translation, Drawing.Rectangle Source, Border? Caption,
-        Drawing.Rectangle Bounds)> captionCache = new();
+    private Drawing.Rectangle[]? captionSources;
+    private int captionPadding;
+    private (Drawing.Rectangle Capture, SubtitleStyle Style, bool JapaneseToThai,
+        double ScaleX, double ScaleY, CaptionStyleProfile CaptionStyle) captionOptions;
+    private sealed record CachedCaption(string Translation, string SourceText, Drawing.Rectangle Source,
+        Border? Caption, Drawing.Rectangle Bounds, Border? Badge, Drawing.Rectangle BadgeBounds,
+        double FontSize, string DisplayText);
+    private readonly Dictionary<int, CachedCaption> captionCache = new();
     private nint handle;
     public nint ControlsHandle { get; set; }
 
@@ -102,15 +131,81 @@ public sealed class SubtitleOverlay : Window
         layoutFrame = maskFrame = null;
         layoutPixels = null;
         captionFrame = null;
-        captionRegions = null;
+        captionSources = null;
         wrappedCache.Clear();
         maskCache.Clear();
+        sourceCoverCache.Clear();
         plainMarginMasks = plainMargins = null;
         captionCache.Clear();
         Hide();
     }
 
     internal void ConfirmRender() => rollbackChildren = null;
+
+    internal Task<bool> UnderlyingVisualPixelsMatchAsync(Drawing.Rectangle capture, BitmapSource? previous,
+        BitmapSource? current, CancellationToken token)
+    {
+        if (!Dispatcher.CheckAccess() || !IsVisible || canvas.Children.Count == 0
+            || previous is null || current is null || !previous.IsFrozen || !current.IsFrozen
+            || previous.Format != PixelFormats.Bgra32
+            || current.Format != PixelFormats.Bgra32 || previous.PixelWidth != capture.Width
+            || previous.PixelHeight != capture.Height || current.PixelWidth != capture.Width
+            || current.PixelHeight != capture.Height)
+            return Task.FromResult(false);
+
+        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice;
+        if (transform is null || transform.Value.M11 <= 0 || transform.Value.M22 <= 0
+            || transform.Value.M11 != captionOptions.ScaleX || transform.Value.M22 != captionOptions.ScaleY)
+            return Task.FromResult(false);
+        var desktop = Forms.SystemInformation.VirtualScreen;
+        var rectangles = new List<Int32Rect>(canvas.Children.Count);
+        foreach (var child in canvas.Children)
+        {
+            if (child is not Border border || border.Visibility != Visibility.Visible) return Task.FromResult(false);
+            double left = Canvas.GetLeft(border), top = Canvas.GetTop(border);
+            if (!double.IsFinite(left) || !double.IsFinite(top) || !double.IsFinite(border.Width)
+                || !double.IsFinite(border.Height) || border.Width <= 0 || border.Height <= 0)
+                return Task.FromResult(false);
+            var pixels = new Drawing.Rectangle(
+                (int)Math.Round(left / transform.Value.M11) + desktop.Left,
+                (int)Math.Round(top / transform.Value.M22) + desktop.Top,
+                (int)Math.Round(border.Width / transform.Value.M11),
+                (int)Math.Round(border.Height / transform.Value.M22));
+            if (pixels.Width <= 0 || pixels.Height <= 0 || !capture.Contains(pixels))
+                return Task.FromResult(false);
+            if (border.Child is null && border.Tag is int) pixels.Inflate(14, 12);
+            pixels.Intersect(capture);
+            pixels.Offset(-capture.X, -capture.Y);
+            rectangles.Add(new Int32Rect(pixels.X, pixels.Y, pixels.Width, pixels.Height));
+        }
+        return Task.Run(() => PixelsMatch(previous, current, rectangles, token), token);
+
+        static bool PixelsMatch(BitmapSource first, BitmapSource second, IReadOnlyList<Int32Rect> regions,
+            CancellationToken cancellationToken)
+        {
+            int capacity = regions.Max(region => checked(region.Width * region.Height * 4));
+            var firstPixels = ArrayPool<byte>.Shared.Rent(capacity);
+            var secondPixels = ArrayPool<byte>.Shared.Rent(capacity);
+            try
+            {
+                foreach (var region in regions)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int stride = checked(region.Width * 4);
+                    int length = checked(stride * region.Height);
+                    first.CopyPixels(region, firstPixels, stride, 0);
+                    second.CopyPixels(region, secondPixels, stride, 0);
+                    if (!firstPixels.AsSpan(0, length).SequenceEqual(secondPixels.AsSpan(0, length))) return false;
+                }
+                return true;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(firstPixels);
+                ArrayPool<byte>.Shared.Return(secondPixels);
+            }
+        }
+    }
 
     internal void Suspend()
     {
@@ -154,19 +249,31 @@ public sealed class SubtitleOverlay : Window
 
     public void Render(Drawing.Rectangle captureBounds, IReadOnlyList<TextRegion> regions,
         IReadOnlyList<string> translations, SubtitleStyle style, int padding = 6, BitmapSource? frame = null,
-        bool japaneseToThai = false, bool allowMissingTranslations = false)
+        bool japaneseToThai = false, bool allowMissingTranslations = false,
+        CaptionStyleProfile? captionStyle = null, CancellationToken cancellationToken = default)
         => RenderCore(captureBounds, regions, translations, style, padding, frame,
-            japaneseToThai, allowMissingTranslations, preferReadableThai: true);
+            japaneseToThai, allowMissingTranslations, captionStyle ?? CaptionStyles.ResolveInstalled(new CaptionStyleOptions()),
+            cancellationToken);
 
     private void RenderCore(Drawing.Rectangle captureBounds, IReadOnlyList<TextRegion> regions,
         IReadOnlyList<string> translations, SubtitleStyle style, int padding, BitmapSource? frame,
-        bool japaneseToThai, bool allowMissingTranslations, bool preferReadableThai)
+        bool japaneseToThai, bool allowMissingTranslations, CaptionStyleProfile captionStyle,
+        CancellationToken cancellationToken)
     {
         Dispatcher.VerifyAccess();
+        cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(regions);
         ArgumentNullException.ThrowIfNull(translations);
         if (regions.Count != translations.Count)
             throw new ArgumentException("Each recognized text region needs one translation.");
+        long textLayoutWork = 0;
+        foreach (string? translation in translations)
+        {
+            int length = translation?.Length ?? 0;
+            if (length > MaxCaptionLength || (textLayoutWork += (long)length * length) > MaxTextLayoutWork)
+                throw new SubtitleLayoutException();
+        }
+        if (regions.Count > MaxCaptionRegions) throw new SubtitleLayoutException();
         if (captureBounds.Width <= 0 || captureBounds.Height <= 0 || padding < 0 || padding > 100)
             throw new ArgumentOutOfRangeException(nameof(captureBounds));
         if (style is not SubtitleStyle.Overlay and not SubtitleStyle.Overwrite)
@@ -176,35 +283,40 @@ public sealed class SubtitleOverlay : Window
         if (regions.Count == 0) { Clear(); return; }
         if (frame is null || !ReferenceEquals(layoutFrame, frame))
         {
-            wrappedCache.Clear();
             layoutFrame = frame;
             layoutPixels = null;
             plainMarginMasks = plainMargins = null;
         }
 
         var (desktop, scaleX, scaleY) = PrepareWindow();
-        bool cacheCaptions = preferReadableThai && frame?.IsFrozen == true;
-        var options = (captureBounds, style, padding, japaneseToThai, scaleX, scaleY);
-        if (preferReadableThai && (!cacheCaptions || !ReferenceEquals(captionFrame, frame)
-            || !ReferenceEquals(captionRegions, regions) || captionOptions != options))
-        {
-            captionCache.Clear();
-            captionFrame = cacheCaptions ? frame : null;
-            captionRegions = cacheCaptions ? regions : null;
-            captionOptions = options;
-        }
-
+        bool cacheCaptions = frame?.IsFrozen == true;
+        var options = (captureBounds, style, japaneseToThai, scaleX, scaleY, captionStyle);
         var sources = regions.Select(region => {
             var clipped = Drawing.Rectangle.Intersect(region.Bounds,
                 new Drawing.Rectangle(0, 0, captureBounds.Width, captureBounds.Height));
             clipped.Offset(captureBounds.Location);
             return clipped;
         }).ToArray();
+        bool sameCaptionInputs = cacheCaptions && captionSources is not null
+            && captionSources.SequenceEqual(sources) && captionOptions == options;
+        bool sameCaptionFrame = sameCaptionInputs && captionPadding == padding && ReferenceEquals(captionFrame, frame);
+        if (!sameCaptionInputs)
+        {
+            captionCache.Clear();
+            wrappedCache.Clear();
+        }
+        captionFrame = cacheCaptions ? frame : null;
+        captionSources = cacheCaptions ? (Drawing.Rectangle[])sources.Clone() : null;
+        captionPadding = padding;
+        captionOptions = options;
+
         var masks = sources.Select(source => {
             if (source.Width <= 0 || source.Height <= 0) return Drawing.Rectangle.Empty;
             source.Inflate(padding, padding);
-            return Drawing.Rectangle.Intersect(source, desktop);
+            return Drawing.Rectangle.Intersect(source, captureBounds);
         }).ToArray();
+        if (masks.Sum(mask => (long)mask.Width * mask.Height) > MaxCoverPixels)
+            throw new SubtitleLayoutException();
         byte[]? backgroundPixels = null;
         if (frame is not null && style == SubtitleStyle.Overwrite)
         {
@@ -221,21 +333,32 @@ public sealed class SubtitleOverlay : Window
         var placed = new List<Drawing.Rectangle>();
         var visuals = new List<(Border Border, Drawing.Rectangle Bounds)>();
         var marginIndices = new List<int>();
+        var sourceCovers = new (Brush Patch, Drawing.Rectangle Bounds, Brush Caption, Color Background)?[masks.Length];
+        var workBudget = new RenderWorkBudget();
 
         if (style == SubtitleStyle.Overwrite)
             for (int i = 0; i < masks.Length; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (masks[i].Width > 0 && masks[i].Height > 0
                     && !string.IsNullOrWhiteSpace(translations[i]))
-                    visuals.Add((new Border { Background = MaskBrushForFrame(masks[i], captureBounds, backgroundPixels, frame), Tag = i }, masks[i]));
+                {
+                    sourceCovers[i] = SourceCoverForFrame(sources[i], masks[i], captureBounds, backgroundPixels, frame,
+                        cancellationToken);
+                    if (sourceCovers[i] is { } sourceCover)
+                        visuals.Add((new Border { Background = sourceCover.Patch, Tag = i }, sourceCover.Bounds));
+                }
+            }
 
-        if (!allowMissingTranslations && preferReadableThai && japaneseToThai && style == SubtitleStyle.Overwrite && frame is not null
+        if (!allowMissingTranslations && japaneseToThai && style == SubtitleStyle.Overwrite && frame is not null
             && translations.All(translation => !string.IsNullOrWhiteSpace(translation))
             && backgroundPixels is not null && TryRenderVerticalIndex(captureBounds, regions, translations,
-                sources, backgroundPixels, desktop, scaleX, scaleY, visuals))
+                sources, backgroundPixels, desktop, scaleX, scaleY, visuals, captionStyle, cancellationToken))
             return;
 
         for (int i = 0; i < regions.Count; i++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (sources[i].Width <= 0 || sources[i].Height <= 0) continue;
             if (string.IsNullOrWhiteSpace(translations[i]))
             {
@@ -243,53 +366,104 @@ public sealed class SubtitleOverlay : Window
                     || allowMissingTranslations && style == SubtitleStyle.Overwrite) continue;
                 throw new InvalidOperationException("The local model returned an empty translation; subtitles were not shown.");
             }
-            var source = masks[i];
+            var source = sources[i];
+            var cover = masks[i];
+            var permittedLocalArea = PermittedCaptionArea(source, captureBounds);
+            var appearance = CaptionAppearance(CaptionStyles.ForRegion(captionStyle, regions[i]));
             string translation = japaneseToThai && style == SubtitleStyle.Overwrite
                 ? SafeThaiTranslation(translations[i]) : translations[i];
             if (cacheCaptions && captionCache.TryGetValue(i, out var previous)
-                && previous.Translation == translation && previous.Source == source)
+                && previous.Translation == translation && previous.SourceText == regions[i].Text
+                && previous.Source == source)
             {
-                if (previous.Caption is null) marginIndices.Add(i);
-                else { placed.Add(previous.Bounds); visuals.Add((previous.Caption, previous.Bounds)); }
-                continue;
+                if (previous.Caption is null || !sameCaptionFrame && previous.Badge is not null)
+                {
+                    if (!sameCaptionFrame && previous.Badge is not null)
+                        captionCache[i] = previous with { Caption = null, Bounds = Drawing.Rectangle.Empty,
+                            Badge = null, BadgeBounds = Drawing.Rectangle.Empty, FontSize = 0,
+                            DisplayText = string.Empty };
+                    marginIndices.Add(i);
+                    continue;
+                }
+                else if (sameCaptionFrame)
+                {
+                    placed.Add(previous.Bounds);
+                    visuals.Add((previous.Caption!, previous.Bounds));
+                    if (previous.Badge is not null) visuals.Add((previous.Badge, previous.BadgeBounds));
+                    continue;
+                }
+                else
+                {
+                    var cachedBackground = BackgroundBrush(previous.Bounds, cover, captureBounds, backgroundPixels,
+                        frame, style, sourceCovers[i]?.Caption, sourceCovers[i]?.Bounds,
+                        sourceCovers[i]?.Background, workBudget, cancellationToken);
+                    if (cachedBackground is not null)
+                    {
+                        var cachedText = new TextBlock {
+                            Text = previous.DisplayText, FontFamily = appearance.Font,
+                            FontWeight = appearance.Weight, FontSize = previous.FontSize,
+                            Language = XmlLanguage.GetLanguage(translation.Any(character => character is >= '\u0e00' and <= '\u0e7f')
+                                ? "th-TH" : "en-US"),
+                            Foreground = appearance.Foreground, Effect = appearance.Effect,
+                            TextWrapping = translation.Any(character => character is >= '\u0e00' and <= '\u0e7f')
+                                ? TextWrapping.NoWrap : TextWrapping.Wrap,
+                            TextAlignment = TextAlignment.Center,
+                            TextTrimming = TextTrimming.None
+                        };
+                        var cachedCaption = new Border { Tag = i, Background = cachedBackground,
+                            Padding = new Thickness(6 * scaleX, 6 * scaleY, 6 * scaleX, 6 * scaleY),
+                            Child = cachedText };
+                        placed.Add(previous.Bounds);
+                        visuals.Add((cachedCaption, previous.Bounds));
+                        captionCache[i] = previous with { Caption = cachedCaption, Badge = null,
+                            BadgeBounds = Drawing.Rectangle.Empty };
+                        continue;
+                    }
+                }
             }
             if (cacheCaptions)
                 foreach (int stale in captionCache.Keys.Where(index => index >= i).ToArray())
                     captionCache.Remove(stale);
-            var monitor = Forms.Screen.FromPoint(new Drawing.Point(source.Left + source.Width / 2,
-                source.Top + source.Height / 2)).Bounds;
-            var blockers = masks.Where((mask, index) => index != i && mask.Width > 0 && mask.Height > 0)
+            var blockers = sources.Where((candidate, index) => index != i
+                    && candidate.Width > 0 && candidate.Height > 0)
                 .Concat(placed).ToArray();
             Border? caption = null;
             Drawing.Rectangle? position = null;
+            double selectedFontSize = 0;
+            string displayText = translation;
             bool backgroundRejected = false;
             bool thai = translation.Any(character => character is >= '\u0e00' and <= '\u0e7f');
             var words = thai ? ThaiWords(translation) : null;
-            // Keep captions tied to the recognized textbox; grow only enough to fit its translation.
-            foreach (double fontSize in CaptionFontSizes(source.Height, scaleY)
-                .Where(size => !preferReadableThai || !japaneseToThai || style != SubtitleStyle.Overwrite || size >= 12))
+            // Keep caption layout independent from source-cover padding.
+            foreach (double fontSize in CaptionFontSizes().Where(size => !japaneseToThai && !thai || size >= 12))
             {
-                var text = new TextBlock {
-                    Text = translation, FontFamily = new FontFamily(thai ? "Leelawadee UI" : "Segoe UI"), FontSize = fontSize,
-                    Language = XmlLanguage.GetLanguage(thai ? "th-TH" : "en-US"),
-                    Foreground = Brushes.Black, TextWrapping = thai ? TextWrapping.NoWrap : TextWrapping.Wrap,
-                    TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.None
-                };
-                Brush? captionBackground = backgroundPixels is null ? Brushes.White : null;
-                double maxWidthDip = Math.Min(monitor.Width * scaleX, Math.Min(320, Math.Max(80, source.Width * scaleX * 2.5)));
+                cancellationToken.ThrowIfCancellationRequested();
+                double bestScore = double.PositiveInfinity;
+                double maxWidthDip = Math.Min(captureBounds.Width * scaleX,
+                    Math.Min(320, Math.Max(80, source.Width * scaleX * 2.5)));
                 var lineWidths = new Dictionary<string, double>();
-                foreach (double widthDip in new[] { source.Width * scaleX, source.Width * scaleX * 1.5,
-                    source.Width * scaleX * 2, maxWidthDip }.Select(width => Math.Min(width, maxWidthDip)).Distinct().Order())
+                foreach (double widthDip in new[] { source.Width * scaleX, (source.Width + 12) * scaleX,
+                    source.Width * scaleX * 1.5, source.Width * scaleX * 2,
+                    permittedLocalArea.Width * scaleX, maxWidthDip }
+                    .Select(width => Math.Min(width, maxWidthDip)).Distinct().Order())
                 {
-                    int width = Math.Min(monitor.Width, (int)Math.Ceiling(widthDip / scaleX));
-                    double insetX = padding * scaleX, insetY = padding * scaleY;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var text = new TextBlock {
+                        Text = translation, FontFamily = appearance.Font, FontWeight = appearance.Weight, FontSize = fontSize,
+                        Language = XmlLanguage.GetLanguage(thai ? "th-TH" : "en-US"),
+                        Foreground = appearance.Foreground, Effect = appearance.Effect,
+                        TextWrapping = thai ? TextWrapping.NoWrap : TextWrapping.Wrap,
+                        TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.None
+                    };
+                    int width = Math.Min(captureBounds.Width, (int)Math.Ceiling(widthDip / scaleX));
+                    double insetX = 6 * scaleX, insetY = 6 * scaleY;
                     double contentWidth = Math.Max(1, width * scaleX - insetX * 2);
                     if (words is not null)
                     {
                         var key = (translation, fontSize, contentWidth);
                         if (!wrappedCache.TryGetValue(key, out string? wrapped))
                         {
-                            wrapped = WrapWords(text, words, contentWidth, lineWidths) ? text.Text : null;
+                            wrapped = WrapWords(text, words, contentWidth, lineWidths, cancellationToken) ? text.Text : null;
                             wrappedCache[key] = wrapped;
                         }
                         if (wrapped is null) continue;
@@ -297,59 +471,73 @@ public sealed class SubtitleOverlay : Window
                     }
                     text.Measure(new Size(contentWidth, double.PositiveInfinity));
                     int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
-                    double maxHeight = source.Height * (style == SubtitleStyle.Overlay ? 2.4 : 1.8);
+                    double maxHeight = Math.Min(captureBounds.Height,
+                        Math.Max(72, source.Height * (style == SubtitleStyle.Overlay ? 2.4 : 1.8)));
                     if (height > maxHeight || height > width * 1.6) continue;
-                    if (backgroundPixels is not null)
-                        captionBackground = null;
-                    position = SubtitleLayout.Place(source, new Drawing.Size(width, height), monitor,
-                        blockers, style == SubtitleStyle.Overlay, padding, frame is null ? null
+                    Brush? candidateBackground = backgroundPixels is null ? Brushes.White : null;
+                    var candidatePosition = SubtitleLayout.Place(source, new Drawing.Size(width, height), captureBounds,
+                        blockers, style == SubtitleStyle.Overlay, 6, frame is null ? null
                             : candidate => {
+                                workBudget.CheckPlacement();
+                                if (style == SubtitleStyle.Overwrite && !permittedLocalArea.Contains(candidate))
+                                    return false;
                                 if (style == SubtitleStyle.Overwrite
                                     && Math.Abs(candidate.Left + candidate.Width / 2 - (source.Left + source.Width / 2)) > Math.Max(32, source.Width / 2))
                                     return false;
-                                captionBackground = BackgroundBrush(candidate, source, captureBounds, backgroundPixels, frame, style);
-                                return captionBackground is not null;
+                                candidateBackground = BackgroundBrush(candidate, cover, captureBounds, backgroundPixels,
+                                    frame, style, sourceCovers[i]?.Caption, sourceCovers[i]?.Bounds,
+                                    sourceCovers[i]?.Background, workBudget, cancellationToken);
+                                return candidateBackground is not null;
                             });
-                    if (position is null && style == SubtitleStyle.Overwrite && backgroundPixels is not null)
+                    if (candidatePosition is null && style == SubtitleStyle.Overwrite && backgroundPixels is not null)
                         backgroundRejected = true;
-                    if (position is null) continue;
+                    if (candidatePosition is null) continue;
 
-                    text.Foreground = ForegroundBrush(captionBackground!);
+                    double sourceRatio = (double)source.Width / Math.Max(1, source.Height);
+                    double candidateRatio = (double)width / Math.Max(1, height);
+                    double centerX = candidatePosition.Value.Left + candidatePosition.Value.Width / 2d
+                        - (source.Left + source.Width / 2d);
+                    double centerY = candidatePosition.Value.Top + candidatePosition.Value.Height / 2d
+                        - (source.Top + source.Height / 2d);
+                    double score = centerX * centerX + centerY * centerY
+                        + Math.Abs(candidateRatio - sourceRatio) * 100;
+                    if (score >= bestScore) continue;
+                    bestScore = score;
                     caption = new Border {
                         Tag = i,
-                        Background = captionBackground ?? Brushes.White, Padding = new Thickness(insetX, insetY, insetX, insetY),
+                        Background = candidateBackground ?? Brushes.White,
+                        Padding = new Thickness(insetX, insetY, insetX, insetY),
                         Child = text
                     };
-                    break;
+                    position = candidatePosition;
+                    selectedFontSize = fontSize;
+                    displayText = text.Text;
                 }
                 if (caption is not null) break;
             }
             if (caption is null || position is null)
             {
-                if (japaneseToThai && style == SubtitleStyle.Overwrite && frame is not null)
+                if ((thai || japaneseToThai) && style == SubtitleStyle.Overwrite && frame is not null)
                 {
                     marginIndices.Add(i);
-                    if (cacheCaptions) captionCache[i] = (translation, source, null, Drawing.Rectangle.Empty);
+                    if (cacheCaptions) captionCache[i] = new CachedCaption(translation, regions[i].Text, source,
+                        null, Drawing.Rectangle.Empty, null, Drawing.Rectangle.Empty, 0, string.Empty);
                     continue;
                 }
                 throw new SubtitleLayoutException(backgroundRejected);
             }
             placed.Add(position.Value);
             visuals.Add((caption, position.Value));
-            if (cacheCaptions) captionCache[i] = (translation, source, caption, position.Value);
+            if (cacheCaptions) captionCache[i] = new CachedCaption(translation, regions[i].Text, source,
+                caption, position.Value, null, Drawing.Rectangle.Empty, selectedFontSize, displayText);
         }
 
         if (marginIndices.Count > 0)
         {
             if (!TryRenderThaiMargin(captureBounds, masks, sources, translations, marginIndices,
-                    backgroundPixels!, frame, desktop, scaleX, scaleY, padding, visuals))
+                    backgroundPixels!, frame, desktop, scaleX, scaleY, visuals, captionStyle, regions,
+                    workBudget, cancellationToken))
             {
-                if (preferReadableThai && japaneseToThai && style == SubtitleStyle.Overwrite)
-                {
-                    RenderCore(captureBounds, regions, translations, style, padding, frame,
-                        japaneseToThai, allowMissingTranslations, preferReadableThai: false);
-                    return;
-                }
                 throw new SubtitleLayoutException();
             }
             return;
@@ -370,8 +558,10 @@ public sealed class SubtitleOverlay : Window
 
     private bool TryRenderVerticalIndex(Drawing.Rectangle capture, IReadOnlyList<TextRegion> regions,
         IReadOnlyList<string> translations, Drawing.Rectangle[] sources, byte[] pixels, Drawing.Rectangle desktop,
-        double scaleX, double scaleY, List<(Border Border, Drawing.Rectangle Bounds)> visuals)
+        double scaleX, double scaleY, List<(Border Border, Drawing.Rectangle Bounds)> visuals,
+        CaptionStyleProfile captionStyle, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (regions.Count < 12 || regions.Count(region => region.Bounds.Width <= capture.Width / 35
             && region.Bounds.Height >= region.Bounds.Width * 4) < regions.Count * 3 / 4)
             return false;
@@ -383,12 +573,15 @@ public sealed class SubtitleOverlay : Window
         if (panel.Width < 700 || panel.Height < 500) return false;
         int samples = 0, white = 0;
         for (int y = panel.Top; y < panel.Bottom; y += 24)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             for (int x = panel.Left; x < panel.Right; x += 24)
             {
                 int offset = ((y - capture.Top) * capture.Width + x - capture.Left) * 4;
                 if (pixels[offset] >= 232 && pixels[offset + 1] >= 232 && pixels[offset + 2] >= 232) white++;
                 samples++;
             }
+        }
         if (white < samples * 0.72) return false;
 
         int title = Enumerable.Range(0, regions.Count).FirstOrDefault(i => regions[i].Text.Contains("目次"), -1);
@@ -409,9 +602,14 @@ public sealed class SubtitleOverlay : Window
         var captions = new List<(Border Border, Drawing.Rectangle Bounds)>();
         for (int position = -1; position < order.Length; position++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int i = position < 0 ? title : order[position];
             if (i < 0 || string.IsNullOrWhiteSpace(translations[i])) continue;
             string value = title == i ? "สารบัญ" : SafeThaiTranslation(translations[i]);
+            var appearance = CaptionAppearance(title == i && captionStyle.Role == CaptionRole.Auto
+                ? CaptionStyles.Resolve(new CaptionStyleOptions(CaptionRole.Emphasis, captionStyle.Typeface),
+                    new[] { captionStyle.Typeface })
+                : CaptionStyles.ForRegion(captionStyle, regions[i]));
             var box = position < 0
                 ? new Drawing.Rectangle(panel.Left + 20, panel.Top + 10, panel.Width - 40, 58)
                 : new Drawing.Rectangle(panel.Left + (position < split ? panel.Width / 2 + 8 : 20),
@@ -420,11 +618,13 @@ public sealed class SubtitleOverlay : Window
             TextBlock? text = null;
             foreach (double fontSize in position < 0 ? new[] { 24d } : new[] { 18d, 17d, 16d, 15d, 14d, 13d, 12d })
             {
-                var candidate = new TextBlock { FontFamily = new FontFamily("Leelawadee UI"), FontSize = fontSize,
-                    Language = XmlLanguage.GetLanguage("th-TH"), Foreground = Brushes.Black,
+                var candidate = new TextBlock { FontFamily = appearance.Font, FontWeight = appearance.Weight,
+                    FontSize = fontSize, Language = XmlLanguage.GetLanguage("th-TH"),
+                    Foreground = appearance.Foreground, Effect = appearance.Effect,
                     TextAlignment = position < 0 ? TextAlignment.Center : TextAlignment.Left };
                 double width = (box.Width - 16) * scaleX;
-                if (!WrapWords(candidate, ThaiWords(value), width)) continue;
+                if (!WrapWords(candidate, ThaiWords(value), width,
+                        cancellationToken: cancellationToken)) continue;
                 candidate.Measure(new Size(width, double.PositiveInfinity));
                 if (candidate.DesiredSize.Height <= (box.Height - 4) * scaleY) { text = candidate; break; }
             }
@@ -457,61 +657,89 @@ public sealed class SubtitleOverlay : Window
 
     private bool TryRenderThaiMargin(Drawing.Rectangle capture, Drawing.Rectangle[] masks,
         Drawing.Rectangle[] sources, IReadOnlyList<string> translations, IReadOnlyList<int> overflow, byte[] pixels,
-        BitmapSource? frame, Drawing.Rectangle desktop, double scaleX, double scaleY, int padding,
-        List<(Border Border, Drawing.Rectangle Bounds)> visuals)
+        BitmapSource? frame, Drawing.Rectangle desktop, double scaleX, double scaleY,
+        List<(Border Border, Drawing.Rectangle Bounds)> visuals,
+        CaptionStyleProfile captionStyle, IReadOnlyList<TextRegion> regions,
+        RenderWorkBudget workBudget, CancellationToken cancellationToken)
     {
-        var margins = PlainMarginsForFrame(capture, masks, pixels, frame);
+        cancellationToken.ThrowIfCancellationRequested();
+        var margins = PlainMarginsForFrame(capture, masks, pixels, frame, cancellationToken);
         if (margins.Length == 0) return false;
-        var marginBackgrounds = margins.Select(margin => BackgroundBrush(margin, Drawing.Rectangle.Empty,
-            capture, pixels, null, SubtitleStyle.Overwrite) ?? Brushes.White).ToArray();
+        var safeMargins = margins.Select(margin => (Margin: margin,
+                Background: BackgroundBrush(margin, Drawing.Rectangle.Empty, capture, pixels, null,
+                    SubtitleStyle.Overwrite, null, null, null, workBudget, cancellationToken)))
+            .Where(candidate => candidate.Background is not null).ToArray();
+        if (safeMargins.Length == 0) return false;
+        margins = safeMargins.Select(candidate => candidate.Margin).ToArray();
+        var marginBackgrounds = safeMargins.Select(candidate => candidate.Background!).ToArray();
         var placed = new List<(Border Border, Drawing.Rectangle Bounds)>();
         var readingOrder = overflow
             .OrderByDescending(i => sources[i].Left + sources[i].Width / 2)
             .ThenBy(i => sources[i].Top).ToArray();
-        var numbers = readingOrder.Select((sourceIndex, rank) => (sourceIndex, number: rank + 1))
+        var numbers = Enumerable.Range(0, sources.Length)
+            .OrderByDescending(i => sources[i].Left + sources[i].Width / 2)
+            .ThenBy(i => sources[i].Top)
+            .Select((sourceIndex, rank) => (sourceIndex, number: rank + 1))
             .ToDictionary(pair => pair.sourceIndex, pair => pair.number);
-        foreach (double fontSize in new[] { 12d, 11d, 10d, 9d, 8d })
+        foreach (double fontSize in new[] { 12d })
         foreach (int firstColumnCount in margins.Length == 1
                      ? new[] { readingOrder.Length }
-                     : fontSize >= 12
-                         ? new[] { readingOrder.Length, (readingOrder.Length + 1) / 2 }
-                         : new[] { (readingOrder.Length + 1) / 2, readingOrder.Length })
+                     : new[] { readingOrder.Length, 0, (readingOrder.Length + 1) / 2 }.Distinct())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             placed.Clear();
-            int[] tops = margins.Select(margin => margin.Top).ToArray();
+            int[] tops = margins.Select(margin => visuals
+                .Where(visual => visual.Border.Child is TextBlock && margin.Contains(visual.Bounds))
+                .Select(visual => visual.Bounds.Bottom + 1).DefaultIfEmpty(margin.Top).Max()).ToArray();
             bool fits = true;
             for (int orderIndex = 0; orderIndex < readingOrder.Length; orderIndex++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int i = readingOrder[orderIndex];
+                var appearance = CaptionAppearance(CaptionStyles.ForRegion(captionStyle, regions[i]));
                 int column = orderIndex < firstColumnCount ? 0 : 1;
                 var margin = margins[column];
                 string translation = $"{numbers[i]}. {SafeThaiTranslation(translations[i])}";
                 var text = new TextBlock {
-                    Text = translation, FontFamily = new FontFamily("Leelawadee UI"), FontSize = fontSize,
-                    Language = XmlLanguage.GetLanguage("th-TH"), Foreground = Brushes.Black,
+                    Text = translation, FontFamily = appearance.Font, FontWeight = appearance.Weight,
+                    FontSize = fontSize, Language = XmlLanguage.GetLanguage("th-TH"),
+                    Foreground = appearance.Foreground, Effect = appearance.Effect,
                     TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center
                 };
-                double insetX = padding * scaleX, insetY = scaleY;
+                double insetX = 6 * scaleX, insetY = scaleY;
                 double contentWidth = margin.Width * scaleX - insetX * 2;
-                if (!WrapWords(text, ThaiWords(translation), contentWidth)) { fits = false; break; }
+                if (!WrapWords(text, ThaiWords(translation), contentWidth,
+                        cancellationToken: cancellationToken)) { fits = false; break; }
                 text.Measure(new Size(contentWidth, double.PositiveInfinity));
                 int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
                 if (tops[column] + height > margin.Bottom) { fits = false; break; }
                 var bounds = new Drawing.Rectangle(margin.Left, tops[column], margin.Width, height);
-                text.Foreground = ForegroundBrush(marginBackgrounds[column]);
+                if (visuals.Any(visual => visual.Border.Child is TextBlock
+                    && visual.Bounds.IntersectsWith(bounds))) { fits = false; break; }
                 placed.Add((new Border { Tag = i, Background = marginBackgrounds[column],
                     Padding = new Thickness(insetX, insetY, insetX, insetY), Child = text }, bounds));
                 tops[column] += height + 1;
             }
             if (!fits) continue;
             visuals.AddRange(placed);
+            var badges = new List<(Border Border, Drawing.Rectangle Bounds)>();
             foreach (int i in readingOrder)
             {
-                var sourceMask = masks[i];
+                cancellationToken.ThrowIfCancellationRequested();
+                var source = sources[i];
                 var badge = Badge(numbers[i], i);
-                visuals.Add((badge, new Drawing.Rectangle(sourceMask.Left, sourceMask.Top,
-                    Math.Min(sourceMask.Width, 24), Math.Min(sourceMask.Height, 24))));
+                var badgeBounds = new Drawing.Rectangle(source.Left, source.Top,
+                    Math.Min(source.Width, 24), Math.Min(source.Height, 24));
+                badges.Add((badge, badgeBounds));
+                if (captionCache.TryGetValue(i, out var cached))
+                {
+                    var marginCaption = placed.Single(item => Equals(item.Border.Tag, i));
+                    captionCache[i] = cached with { Caption = marginCaption.Border, Bounds = marginCaption.Bounds,
+                        Badge = badge, BadgeBounds = badgeBounds, FontSize = 12,
+                        DisplayText = ((TextBlock)marginCaption.Border.Child).Text };
+                }
             }
+            visuals.AddRange(badges);
             rollbackChildren ??= canvas.Children.Cast<UIElement>().ToArray();
             canvas.Children.Clear();
             foreach (var (border, bounds) in visuals) canvas.Children.Add(Positioned(border, bounds));
@@ -530,13 +758,13 @@ public sealed class SubtitleOverlay : Window
     }
 
     private Drawing.Rectangle[] PlainMarginsForFrame(Drawing.Rectangle capture, Drawing.Rectangle[] masks,
-        byte[] pixels, BitmapSource? frame)
+        byte[] pixels, BitmapSource? frame, CancellationToken cancellationToken)
     {
         if (frame?.IsFrozen == true && plainMargins is not null && plainMarginMasks is not null
             && plainMarginCapture == capture && plainMarginMasks.SequenceEqual(masks))
             return plainMargins;
 
-        var margins = SubtitleLayout.FindPlainMargins(capture, masks, pixels);
+        var margins = SubtitleLayout.FindPlainMargins(capture, masks, pixels, cancellationToken);
         if (frame?.IsFrozen == true)
         {
             plainMarginCapture = capture;
@@ -557,6 +785,25 @@ public sealed class SubtitleOverlay : Window
             Child = text, IsHitTestVisible = false };
     }
 
+    private static (FontFamily Font, FontWeight Weight, Brush Foreground, Effect? Effect)
+        CaptionAppearance(CaptionStyleProfile style)
+    {
+        var foreground = new SolidColorBrush(style.Foreground);
+        foreground.Freeze();
+        Effect? effect = style.Effect switch
+        {
+            CaptionEffect.Outline => new DropShadowEffect {
+                Color = style.EffectColor, BlurRadius = 2, ShadowDepth = 0, Opacity = 1
+            },
+            CaptionEffect.Shadow => new DropShadowEffect {
+                Color = style.EffectColor, BlurRadius = 3, ShadowDepth = 1, Opacity = 1
+            },
+            _ => null
+        };
+        effect?.Freeze();
+        return (new FontFamily(style.Typeface), style.Weight, foreground, effect);
+    }
+
     private static string SafeThaiTranslation(string value)
     {
         static bool IsJapanese(char character) => character is >= '\u3040' and <= '\u30ff'
@@ -567,10 +814,9 @@ public sealed class SubtitleOverlay : Window
             ? text : "\u0e41\u0e1b\u0e25\u0e44\u0e21\u0e48\u0e2a\u0e33\u0e40\u0e23\u0e47\u0e08";
     }
 
-    internal static IEnumerable<double> CaptionFontSizes(int sourceHeight, double scaleY)
+    internal static IEnumerable<double> CaptionFontSizes()
     {
-        double largest = Math.Clamp(Math.Round(sourceHeight * scaleY * 0.65), 10, 24);
-        for (double size = largest; size >= 8; size -= 1) yield return size;
+        for (double size = 24; size >= 8; size -= 1) yield return size;
     }
 
     internal static string[] ThaiWords(string value)
@@ -613,7 +859,7 @@ public sealed class SubtitleOverlay : Window
     }
 
     internal static bool WrapWords(TextBlock text, IReadOnlyList<string> words, double width,
-        Dictionary<string, double>? lineWidths = null)
+        Dictionary<string, double>? lineWidths = null, CancellationToken cancellationToken = default)
     {
         var typeface = new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch);
         var culture = text.Language.GetEquivalentCulture();
@@ -631,6 +877,7 @@ public sealed class SubtitleOverlay : Window
         counts[words.Count] = 0;
         for (int start = words.Count - 1; start >= 0; start--)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string line = "";
             for (int end = start; end < words.Count; end++)
             {
@@ -659,6 +906,7 @@ public sealed class SubtitleOverlay : Window
         var lines = new StringBuilder();
         for (int start = 0; start < words.Count; start = next[start])
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (lines.Length > 0) lines.AppendLine();
             lines.Append(string.Concat(words.Skip(start).Take(next[start] - start)));
         }
@@ -667,7 +915,9 @@ public sealed class SubtitleOverlay : Window
     }
 
     private static Brush? BackgroundBrush(Drawing.Rectangle caption, Drawing.Rectangle mask,
-        Drawing.Rectangle capture, byte[]? pixels, BitmapSource? frame, SubtitleStyle style)
+        Drawing.Rectangle capture, byte[]? pixels, BitmapSource? frame, SubtitleStyle style,
+        Brush? qualifiedSourceCover, Drawing.Rectangle? qualifiedFootprint, Color? qualifiedBackground,
+        RenderWorkBudget workBudget, CancellationToken cancellationToken = default)
     {
         if (!capture.Contains(caption)) return style == SubtitleStyle.Overlay ? Brushes.White : null;
         if (style == SubtitleStyle.Overlay && frame is not null)
@@ -683,55 +933,172 @@ public sealed class SubtitleOverlay : Window
             return imageBrush;
         }
         if (pixels is null) return Brushes.White;
-        if (mask.Contains(caption)) return MaskBrush(mask, capture, pixels);
-        long sampleUpperBound = ((long)caption.Width + 1) / 2 * (((long)caption.Height + 1) / 2);
-        int samples = 0, bright = 0, minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
+        bool transparentQualifiedCover = ReferenceEquals(qualifiedSourceCover, Brushes.Transparent);
+        if (mask.Contains(caption) && !transparentQualifiedCover) return qualifiedSourceCover;
+        var protectedArea = transparentQualifiedCover && qualifiedFootprint.HasValue
+            ? qualifiedFootprint.Value : mask;
+        int samples = 0, minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
         long totalR = 0, totalG = 0, totalB = 0;
-        for (int y = caption.Top; y < caption.Bottom; y += 2)
-            for (int x = caption.Left; x < caption.Right; x += 2)
+        for (int y = caption.Top; y < caption.Bottom; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            workBudget.SampleBackgroundRow(caption.Width);
+            for (int x = caption.Left; x < caption.Right; x++)
             {
-                if (mask.Contains(x, y)) continue;
+                if (protectedArea.Contains(x, y)) continue;
                 int offset = ((y - capture.Y) * capture.Width + x - capture.X) * 4;
                 int b = pixels[offset], g = pixels[offset + 1], r = pixels[offset + 2];
-                if (r >= 232 && g >= 232 && b >= 232) bright++;
                 minR = Math.Min(minR, r); minG = Math.Min(minG, g); minB = Math.Min(minB, b);
                 maxR = Math.Max(maxR, r); maxG = Math.Max(maxG, g); maxB = Math.Max(maxB, b);
                 totalR += r; totalG += g; totalB += b; samples++;
-                // Once over 5% of the full sample grid is nonbright, the 95%-white exception is impossible.
-                if ((maxR - minR > 32 || maxG - minG > 32 || maxB - minB > 32)
-                    && 20L * (samples - bright) > sampleUpperBound) return null;
+                if (maxR - minR > 32 || maxG - minG > 32 || maxB - minB > 32) return null;
             }
-        if (samples == 0 || bright >= samples * 0.95) return Brushes.White;
-        // ponytail: keep captions in a flat bubble; region-aware inpainting is needed for text on artwork.
-        if (maxR - minR > 32 || maxG - minG > 32 || maxB - minB > 32) return null;
-        var brush = new SolidColorBrush(Color.FromRgb((byte)(totalR / samples), (byte)(totalG / samples), (byte)(totalB / samples)));
+        }
+        if (samples == 0) return transparentQualifiedCover ? Brushes.Transparent : Brushes.White;
+        int averageR = (int)(totalR / samples), averageG = (int)(totalG / samples), averageB = (int)(totalB / samples);
+        if (transparentQualifiedCover)
+        {
+            if (qualifiedBackground is not Color reference
+                || Math.Abs(averageR - reference.R) > 48
+                || Math.Abs(averageG - reference.G) > 48
+                || Math.Abs(averageB - reference.B) > 48) return null;
+            // ponytail: reconstructed-color compatibility handles qualified fills/gradients; artwork needs segmentation.
+            return Brushes.Transparent;
+        }
+        // ponytail: only neutral flat space is a safe automatic fallback; semantic artwork needs a real segmenter.
+        if (Math.Max(averageR, Math.Max(averageG, averageB)) - Math.Min(averageR, Math.Min(averageG, averageB)) > 24)
+            return null;
+        if (averageR >= 232 && averageG >= 232 && averageB >= 232) return Brushes.White;
+        var brush = new SolidColorBrush(Color.FromRgb((byte)averageR, (byte)averageG, (byte)averageB));
         brush.Freeze();
         return brush;
     }
 
     private Brush MaskBrushForFrame(Drawing.Rectangle mask, Drawing.Rectangle capture,
-        byte[]? pixels, BitmapSource? frame)
+        byte[]? pixels, BitmapSource? frame, CancellationToken cancellationToken = default)
     {
-        if (frame is null || !frame.IsFrozen) return MaskBrush(mask, capture, pixels);
-        if (!ReferenceEquals(maskFrame, frame) || maskCapture != capture)
-        {
-            maskFrame = frame;
-            maskCapture = capture;
-            maskCache.Clear();
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        if (frame is null || !frame.IsFrozen) return MaskBrush(mask, capture, pixels, cancellationToken);
+        EnsureMaskCache(frame, capture);
         if (!maskCache.TryGetValue(mask, out var brush))
-            maskCache[mask] = brush = MaskBrush(mask, capture, pixels);
+            maskCache[mask] = brush = MaskBrush(mask, capture, pixels, cancellationToken);
         return brush;
     }
 
-    internal static Brush MaskBrush(Drawing.Rectangle mask, Drawing.Rectangle capture, byte[]? pixels)
+    private (Brush Patch, Drawing.Rectangle Bounds, Brush Caption, Color Background)? SourceCoverForFrame(
+        Drawing.Rectangle source, Drawing.Rectangle mask, Drawing.Rectangle capture,
+        byte[]? pixels, BitmapSource? frame, CancellationToken cancellationToken)
+    {
+        var key = (source, mask);
+        if (frame?.IsFrozen == true)
+        {
+            EnsureMaskCache(frame, capture);
+            if (sourceCoverCache.TryGetValue(key, out var cached)) return cached;
+        }
+
+        var result = Create();
+        if (frame?.IsFrozen == true) sourceCoverCache[key] = result;
+        return result;
+
+        (Brush Patch, Drawing.Rectangle Bounds, Brush Caption, Color Background)? Create()
+        {
+            if (pixels is null)
+            {
+                var plain = MaskBrushForFrame(mask, capture, null, frame, cancellationToken);
+                return (plain, mask, plain, Colors.Transparent);
+            }
+
+            var localSource = source;
+            var localMask = mask;
+            localSource.Offset(-capture.X, -capture.Y);
+            localMask.Offset(-capture.X, -capture.Y);
+            var plan = SourceCover.TryCreate(pixels, capture.Width, capture.Height, capture.Width * 4,
+                localSource, localMask, cancellationToken);
+            if (plan is null)
+            {
+                if (!CanUseLegacyMonochromeCover(source, mask, capture, pixels, cancellationToken)) return null;
+                var plain = MaskBrushForFrame(mask, capture, pixels, frame, cancellationToken);
+                return (plain, mask, plain, Colors.Transparent);
+            }
+
+            byte[] patch = plan.CreatePatch(cancellationToken);
+            long backgroundB = 0, backgroundG = 0, backgroundR = 0;
+            int backgroundSamples = 0;
+            for (int offset = 0; offset < patch.Length; offset += 4)
+            {
+                if ((offset & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
+                if (patch[offset + 3] == 0) continue;
+                backgroundB += patch[offset]; backgroundG += patch[offset + 1]; backgroundR += patch[offset + 2];
+                backgroundSamples++;
+            }
+            if (backgroundSamples == 0) return null;
+            var background = Color.FromRgb((byte)(backgroundR / backgroundSamples),
+                (byte)(backgroundG / backgroundSamples), (byte)(backgroundB / backgroundSamples));
+            var texture = BitmapSource.Create(plan.FootprintBounds.Width, plan.FootprintBounds.Height,
+                96, 96, PixelFormats.Bgra32, null, patch, plan.FootprintBounds.Width * 4);
+            texture.Freeze();
+            var patchBrush = new ImageBrush(texture) { Stretch = Stretch.Fill };
+            patchBrush.Freeze();
+            var bounds = plan.FootprintBounds;
+            bounds.Offset(capture.Location);
+            return (patchBrush, bounds, Brushes.Transparent, background);
+        }
+    }
+
+    internal static Drawing.Rectangle PermittedCaptionArea(Drawing.Rectangle source, Drawing.Rectangle capture)
+    {
+        if (source.Width <= 0 || source.Height <= 0) return Drawing.Rectangle.Empty;
+        var permitted = source;
+        permitted.Inflate(Math.Max(48, (int)Math.Ceiling(source.Width * 0.75)),
+            Math.Max(36, (int)Math.Ceiling(source.Height * 0.4)));
+        return Drawing.Rectangle.Intersect(permitted, capture);
+    }
+
+    private void EnsureMaskCache(BitmapSource frame, Drawing.Rectangle capture)
+    {
+        if (ReferenceEquals(maskFrame, frame) && maskCapture == capture) return;
+        maskFrame = frame;
+        maskCapture = capture;
+        maskCache.Clear();
+        sourceCoverCache.Clear();
+    }
+
+    private static bool CanUseLegacyMonochromeCover(Drawing.Rectangle source, Drawing.Rectangle mask,
+        Drawing.Rectangle capture, byte[] pixels, CancellationToken cancellationToken)
+    {
+        if (!SourceCover.IsWithinBudget(mask)) return false;
+        int samples = 0, min = 255, max = 0;
+        for (int y = mask.Top; y < mask.Bottom; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (int x = mask.Left; x < mask.Right; x++)
+            {
+                if (source.Contains(x, y)) continue;
+                int offset = ((y - capture.Top) * capture.Width + x - capture.Left) * 4;
+                int b = pixels[offset], g = pixels[offset + 1], r = pixels[offset + 2];
+                if (Math.Max(Math.Abs(r - g), Math.Max(Math.Abs(r - b), Math.Abs(g - b))) > 12)
+                    return false;
+                int shade = (r + g + b) / 3;
+                min = Math.Min(min, shade);
+                max = Math.Max(max, shade);
+                samples++;
+            }
+        }
+        return samples >= 4 && max - min <= 32;
+    }
+
+    internal static Brush MaskBrush(Drawing.Rectangle mask, Drawing.Rectangle capture, byte[]? pixels,
+        CancellationToken cancellationToken = default)
     {
         if (pixels is null) return Brushes.White;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!SourceCover.IsWithinBudget(mask)) throw new SubtitleLayoutException();
         var fill = new byte[checked(mask.Width * mask.Height * 4)];
         var above = Sample(mask.Left + mask.Width / 2 - 6, mask.Left + mask.Width / 2 + 6, mask.Top - 8);
         var below = Sample(mask.Left + mask.Width / 2 - 6, mask.Left + mask.Width / 2 + 6, mask.Bottom + 8);
         for (int y = 0; y < mask.Height; y++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int sourceY = Math.Clamp(mask.Top + y, capture.Top, capture.Bottom - 1);
             var left = Sample(mask.Left - 14, mask.Left - 2, sourceY);
             var right = Sample(mask.Right + 2, mask.Right + 14, sourceY);
@@ -776,20 +1143,26 @@ public sealed class SubtitleOverlay : Window
             int top = Math.Max(capture.Top, centerY - 4), bottom = Math.Min(capture.Bottom, centerY + 5);
             int brightest = 0;
             for (int sy = top; sy < bottom; sy++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 for (int sx = startX; sx < endX; sx++)
                 {
                     int offset = ((sy - capture.Top) * capture.Width + sx - capture.Left) * 4;
                     brightest = Math.Max(brightest, (pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3);
                 }
+            }
             long b = 0, g = 0, r = 0;
             int count = 0;
             for (int sy = top; sy < bottom; sy++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 for (int sx = startX; sx < endX; sx++)
                 {
                     int offset = ((sy - capture.Top) * capture.Width + sx - capture.Left) * 4;
                     if ((pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3 < brightest - 24) continue;
                     b += pixels[offset]; g += pixels[offset + 1]; r += pixels[offset + 2]; count++;
                 }
+            }
             return count == 0 ? null : Color.FromRgb((byte)(r / count), (byte)(g / count), (byte)(b / count));
         }
     }

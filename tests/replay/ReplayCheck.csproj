@@ -6,12 +6,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationManifest>../../src/Translumo/app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../src/Translumo/Local/SubtitleOverlay.cs" />
-    <Compile Include="../../src/Translumo/Local/SubtitleLayout.cs" />
-    <Compile Include="../../src/Translumo/Local/CaptionStyle.cs" />
-    <Compile Include="../../src/Translumo/Local/SourceCover.cs" />
-    <Compile Include="../../src/Translumo/Local/TextRegion.cs" />
+    <ProjectReference Include="../../src/Translumo/Translumo.csproj" />
+    <Content Include="fixtures/cases.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

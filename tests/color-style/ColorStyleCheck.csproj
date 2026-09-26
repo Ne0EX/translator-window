@@ -8,9 +8,8 @@
     <ImplicitUsings>disable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../src/Translumo/Local/SubtitleOverlay.cs" />
-    <Compile Include="../../src/Translumo/Local/SubtitleLayout.cs" />
     <Compile Include="../../src/Translumo/Local/CaptionStyle.cs" />
+    <Compile Include="../../src/Translumo/Local/LocalWindowSettings.cs" />
     <Compile Include="../../src/Translumo/Local/SourceCover.cs" />
     <Compile Include="../../src/Translumo/Local/TextRegion.cs" />
   </ItemGroup>

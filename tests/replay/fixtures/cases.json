@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "contained-dialogue",
+      "defectClass": "containment",
+      "width": 600,
+      "height": 420,
+      "dpi": 96,
+      "zoom": 1.0,
+      "sourceLanguage": "ja",
+      "targetLanguage": "th",
+      "background": "paper",
+      "regions": [
+        { "id": "dialogue", "bounds": [260, 155, 72, 92], "recognizedText": "ここにいます。", "translation": "ฉันอยู่ที่นี่" }
+      ],
+      "textContainers": [
+        { "regionId": "dialogue", "bounds": [220, 105, 155, 195], "requireCaptionInside": true }
+      ],
+      "protectedArtwork": [
+        { "id": "face", "bounds": [45, 70, 105, 135] },
+        { "id": "panel-edge", "bounds": [465, 40, 10, 330] }
+      ],
+      "intendedPassages": [
+        { "id": "dialogue", "sourceText": "ここにいます。", "regionId": "dialogue", "expectedStage": "caption-complete" }
+      ]
+    },
+    {
+      "id": "dense-readable-margin",
+      "defectClass": "sizing-dense-margin",
+      "width": 800,
+      "height": 700,
+      "dpi": 96,
+      "zoom": 1.0,
+      "sourceLanguage": "ja",
+      "targetLanguage": "th",
+      "background": "dense-margins",
+      "expectMarginCaption": true,
+      "regions": [
+        { "id": "dense-a", "bounds": [330, 90, 52, 34], "recognizedText": "長い台詞その一", "translation": "ข้อความภาษาไทยที่ยาวและต้องรักษาทุกคำเอาไว้โดยไม่ตัดทอนเนื้อหา" },
+        { "id": "dense-b", "bounds": [430, 255, 48, 32], "recognizedText": "長い台詞その二", "translation": "คำแปลอีกส่วนหนึ่งที่ต้องอ่านได้ครบและไม่ชนกับคำบรรยายข้างเคียง" },
+        { "id": "dense-c", "bounds": [305, 440, 50, 32], "recognizedText": "長い台詞その三", "translation": "เนื้อหาส่วนสุดท้ายต้องคงชื่อ ตัวเลข และเครื่องหมายวรรคตอน ๒๕ ไว้ครบ" }
+      ],
+      "textContainers": [
+        { "regionId": "dense-a", "bounds": [300, 65, 115, 100] },
+        { "regionId": "dense-b", "bounds": [405, 225, 105, 105] },
+        { "regionId": "dense-c", "bounds": [280, 410, 110, 100] }
+      ],
+      "protectedArtwork": [
+        { "id": "center-art", "bounds": [185, 515, 430, 130] }
+      ],
+      "intendedPassages": [
+        { "id": "dense-a", "sourceText": "長い台詞その一", "regionId": "dense-a", "expectedStage": "caption-complete" },
+        { "id": "dense-b", "sourceText": "長い台詞その二", "regionId": "dense-b", "expectedStage": "caption-complete" },
+        { "id": "dense-c", "sourceText": "長い台詞その三", "regionId": "dense-c", "expectedStage": "caption-complete" }
+      ]
+    },
+    {
+      "id": "colored-balloon",
+      "defectClass": "color-cover",
+      "width": 620,
+      "height": 420,
+      "dpi": 96,
+      "zoom": 1.0,
+      "sourceLanguage": "ja",
+      "targetLanguage": "th",
+      "background": "colored",
+      "expectColoredCaption": true,
+      "regions": [
+        { "id": "color", "bounds": [270, 115, 65, 145], "recognizedText": "強調された台詞", "translation": "ถ้อยคำเน้นสี" }
+      ],
+      "textContainers": [
+        { "regionId": "color", "bounds": [220, 65, 170, 245], "requireCaptionInside": true }
+      ],
+      "protectedArtwork": [
+        { "id": "ornament-left", "bounds": [45, 60, 110, 275] },
+        { "id": "ornament-right", "bounds": [470, 60, 105, 275] }
+      ],
+      "intendedPassages": [
+        { "id": "color", "sourceText": "強調された台詞", "regionId": "color", "expectedStage": "caption-complete" }
+      ]
+    },
+    {
+      "id": "sparse-control",
+      "defectClass": "sparse-control",
+      "width": 640,
+      "height": 420,
+      "dpi": 96,
+      "zoom": 1.0,
+      "sourceLanguage": "ja",
+      "targetLanguage": "th",
+      "background": "paper",
+      "regions": [
+        { "id": "control", "bounds": [285, 155, 90, 85], "recognizedText": "ありがとう。", "translation": "ขอบคุณ" }
+      ],
+      "textContainers": [
+        { "regionId": "control", "bounds": [245, 115, 175, 165], "requireCaptionInside": true }
+      ],
+      "protectedArtwork": [],
+      "intendedPassages": [
+        { "id": "control", "sourceText": "ありがとう。", "regionId": "control", "expectedStage": "caption-complete" }
+      ]
+    },
+    {
+      "id": "stylized-completeness",
+      "defectClass": "stylized-text-completeness",
+      "width": 700,
+      "height": 460,
+      "dpi": 96,
+      "zoom": 1.0,
+      "sourceLanguage": "ja",
+      "targetLanguage": "th",
+      "background": "gradient",
+      "regions": [
+        { "id": "body", "bounds": [275, 215, 150, 70], "recognizedText": "本文は認識された", "translation": "ข้อความหลักถูกรับรู้ครบ" }
+      ],
+      "textContainers": [
+        { "regionId": "body", "bounds": [235, 175, 230, 150], "requireCaptionInside": true }
+      ],
+      "protectedArtwork": [
+        { "id": "banner-art", "bounds": [90, 345, 520, 55] }
+      ],
+      "intendedPassages": [
+        { "id": "body", "sourceText": "本文は認識された", "regionId": "body", "expectedStage": "caption-complete" },
+        { "id": "stylized-heading", "sourceText": "装飾見出し", "regionId": null, "expectedStage": "unresolved-before-recognized-text" }
+      ]
+    }
+  ]
+}

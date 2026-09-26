@@ -1,13 +1,14 @@
 # Translumo Local
 
-**Version 0.1.0 · Windows x64 · initial source release**
+**Version 0.2.0 release candidate · Windows x64 · source build**
 
-[Release notes](docs/releases/0.1.0.md) · [Changelog](CHANGELOG.md) ·
+[Candidate release notes](docs/releases/0.2.0.md) · [Changelog](CHANGELOG.md) ·
 [Problem and decision ledger](docs/project-ledger.md) · [Domain glossary](CONTEXT.md)
 
-Next version: [v0.2.0 plan](docs/plans/0.2.0.md) ·
+[v0.2.0 implementation plan](docs/plans/0.2.0.md) ·
 [Tracking issue](https://github.com/Ne0EX/translator-window/issues/1) ·
-[Reader feedback and evidence](docs/feedback/2026-09-25-v0.2.0.md)
+[Reader feedback and evidence](docs/feedback/2026-09-25-v0.2.0.md) ·
+[Published v0.1.0 notes](docs/releases/0.1.0.md)
 
 A Windows fork of [ramjke/Translumo](https://github.com/ramjke/Translumo).
 OCR and translation run on your computer. The executable excludes the upstream
@@ -22,6 +23,13 @@ Korean, Japanese, English, and Thai are selectable as source and target language
 The default is **Japanese → Thai**, with **Manga / webtoon text detection** and
 **Subtitle overwrite** enabled. Japanese manga recognition handles both vertical
 and horizontal dialogue automatically.
+
+The v0.2.0 candidate keeps caption placement independent of source-cover padding,
+uses a 12-DIP Thai readability floor, and adds automatic heading emphasis plus
+dialogue, narration, and emphasis overrides. Plain fills and smooth linear gradients
+can use bounded source-text cover reconstruction. Backgrounds rejected by that
+bounded qualifier, including the tested decorated and detailed-artwork cases, keep
+the source visible and use a readable caption fallback.
 
 ## Run
 
@@ -83,10 +91,23 @@ fallback. Ordinary overwrite covers recognized text while translation runs.
 .\.tools\dotnet\dotnet.exe run --project tests/unreadable/UnreadableCheck.csproj -- .
 .\.tools\dotnet\dotnet.exe run --project tests/layout-hold/LayoutHoldCheck.csproj
 .\.tools\dotnet\dotnet.exe run --project tests/overlay/OverlayCheck.csproj -- --visual
+.\.tools\dotnet\dotnet.exe run --project tests/replay/ReplayCheck.csproj -c Release
+.\.tools\dotnet\dotnet.exe run --project tests/color-style/ColorStyleCheck.csproj -c Release
+.\.tools\dotnet\dotnet.exe run --project tests/scroll-alignment/ScrollAlignmentCheck.csproj -c Release
 .\.tools\dotnet\dotnet.exe run --project tests/integration/IntegrationCheck.csproj -- .
 ```
 
-The unreadable-region check uses stub workers and does not open windows or load GPU models.
+The fixed replay, color/style, scroll-alignment, and unreadable-region checks use
+redistribution-safe inputs and do not load GPU models. Replay diagnostics are
+opt-in and stay in ignored local folders.
+On the 2026-09-26 working candidate, the Release build, default and vertical
+overlay checks, layout/cancellation check, fixed replay (all five cases twice),
+color/style check including SRC01, scroll-alignment check, and unreadable-region
+check passed locally. The full visual check passed its feature phases, then its
+final native screenshot failed with an invalid handle. Direct capture was blocked
+by DXGI access denied (`0x80070005`) in the automation environment. Exact-commit
+hosted, private full-processing, reader, matched-v0.1.0, and fresh-machine gates
+remain pending; see the [candidate release notes](docs/releases/0.2.0.md).
 Run visual checks one at a time on an unlocked desktop. They temporarily display
 test windows. The integration check exercises all six capture/style combinations
 with real Japanese OCR and Thai translation, then changed text, moved/resized
@@ -112,15 +133,18 @@ Narrow labels may use numbered captions in a side margin.
 The [measured model comparison](local-model/QUALITY.md) records these limits; successful
 OCR and target-language output do not establish human-quality translation.
 Seamless manga/webtoon reading remains an acceptance goal, not a guarantee for all
-pages: stylized text can evade detection, small text needs zooming, and rectangular
-white masks can cover artwork. This does not perform image inpainting. Dense pages
-can run out of readable caption space; failed layouts clear stale captions
-and report fitting guidance. Larger animated areas can prevent a view
+pages: stylized text can evade detection, small text needs zooming, and detailed
+artwork is outside bounded color-cover support. This does not perform image
+inpainting. Dense pages can run out of readable caption space; failed layouts clear
+stale captions and report fitting guidance. Larger animated areas can prevent a view
 from settling; mixed-DPI multiple-monitor behavior needs a physical hardware test.
 Native-feeling scrolling and page-turn animations remain under manual evaluation.
 The 450 ms navigation pause is provisional; no one-second end-to-end latency or
 universal smoothness guarantee is made. GPU/CPU memory pressure affects both startup
 and reading performance. Fresh-machine setup has not been qualified for this release.
+Translation APIs and LLM providers are deferred to the
+[API backlog](docs/plans/0.2.0.md#deferred-remote-translation-backlog); this
+candidate performs OCR and translation locally and contains no API-key integration.
 
 See [translation runtime](local-model/README.md), [manga OCR](local-ocr/README.md),
 [implementation and evidence](docs/implementation-plan.md), and

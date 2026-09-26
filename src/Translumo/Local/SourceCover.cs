@@ -1,0 +1,281 @@
+using System;
+using System.Drawing;
+using System.Threading;
+
+namespace Translumo.Local;
+
+public enum SourceCoverClass { Plain, Gradient }
+
+public sealed class SourceCoverPlan
+{
+    private readonly Rectangle image;
+    private readonly bool[] mask;
+    private readonly byte[] reconstruction;
+
+    internal SourceCoverPlan(SourceCoverClass classification, Rectangle image, Rectangle permittedArea,
+        Rectangle footprintBounds, bool[] mask, byte[] reconstruction, int coveredPixelCount)
+    {
+        Classification = classification;
+        this.image = image;
+        PermittedArea = permittedArea;
+        FootprintBounds = footprintBounds;
+        this.mask = mask;
+        this.reconstruction = reconstruction;
+        CoveredPixelCount = coveredPixelCount;
+    }
+
+    public SourceCoverClass Classification { get; }
+    public Rectangle PermittedArea { get; }
+    public Rectangle FootprintBounds { get; }
+    public int CoveredPixelCount { get; }
+
+    public byte[] CreatePatch(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var patch = new byte[checked(FootprintBounds.Width * FootprintBounds.Height * 4)];
+        for (int y = FootprintBounds.Top; y < FootprintBounds.Bottom; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (int x = FootprintBounds.Left; x < FootprintBounds.Right; x++)
+            {
+                int maskOffset = (y - PermittedArea.Top) * PermittedArea.Width + x - PermittedArea.Left;
+                if (!mask[maskOffset]) continue;
+                int source = maskOffset * 4;
+                int target = ((y - FootprintBounds.Top) * FootprintBounds.Width + x - FootprintBounds.Left) * 4;
+                reconstruction.AsSpan(source, 4).CopyTo(patch.AsSpan(target, 4));
+            }
+        }
+        return patch;
+    }
+
+    public byte[] Apply(byte[] sourceBgra32, int width, int height, int stride)
+    {
+        SourceCover.Validate(sourceBgra32, width, height, stride);
+        if (width != image.Width || height != image.Height)
+            throw new ArgumentException("The source dimensions differ from the qualified source cover.", nameof(sourceBgra32));
+        var result = (byte[])sourceBgra32.Clone();
+        int reconstructionOffset = 0;
+        for (int y = PermittedArea.Top; y < PermittedArea.Bottom; y++)
+            for (int x = PermittedArea.Left; x < PermittedArea.Right; x++, reconstructionOffset += 4)
+            {
+                int maskOffset = (y - PermittedArea.Top) * PermittedArea.Width + x - PermittedArea.Left;
+                if (!mask[maskOffset]) continue;
+                reconstruction.AsSpan(reconstructionOffset, 4).CopyTo(result.AsSpan(y * stride + x * 4, 4));
+            }
+        return result;
+    }
+}
+
+public static class SourceCover
+{
+    private const int MaxPermittedPixels = 1_000_000;
+
+    internal static bool IsWithinBudget(Rectangle area)
+        => area.Width > 0 && area.Height > 0
+            && (long)area.Width * area.Height <= MaxPermittedPixels;
+
+    public static SourceCoverPlan? TryCreate(byte[] sourceBgra32, int width, int height, int stride,
+        Rectangle textRegion, Rectangle permittedArea, CancellationToken cancellationToken = default)
+    {
+        Validate(sourceBgra32, width, height, stride);
+        cancellationToken.ThrowIfCancellationRequested();
+        var image = new Rectangle(0, 0, width, height);
+        if (textRegion.Width < 3 || textRegion.Height < 3 || !image.Contains(permittedArea)
+            || !permittedArea.Contains(textRegion)) return null;
+        // ponytail: one million pixels bounds UI-thread reconstruction; tile only if oversized text regions become supported.
+        if (!IsWithinBudget(permittedArea)) return null;
+        int sampleWidth = Math.Min(6, Math.Min(textRegion.Left - permittedArea.Left,
+            permittedArea.Right - textRegion.Right));
+        if (sampleWidth < 2) return null;
+
+        var left = new Pixel[textRegion.Height];
+        var right = new Pixel[textRegion.Height];
+        long sampleError = 0;
+        int sampleCount = 0;
+        for (int row = 0; row < textRegion.Height; row++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int y = textRegion.Top + row;
+            left[row] = Average(textRegion.Left - sampleWidth, textRegion.Left, y);
+            right[row] = Average(textRegion.Right, textRegion.Right + sampleWidth, y);
+            AccumulateError(textRegion.Left - sampleWidth, textRegion.Left, y, left[row]);
+            AccumulateError(textRegion.Right, textRegion.Right + sampleWidth, y, right[row]);
+        }
+        if (sampleCount == 0 || sampleError / (double)(sampleCount * 3) > 20) return null;
+        if (!IsSmoothLinear(left) || !IsSmoothLinear(right)) return null;
+
+        long horizontalChange = 0;
+        for (int row = 0; row < textRegion.Height; row++)
+            horizontalChange += Difference(left[row], right[row]);
+        int verticalChange = Difference(left[0], left[^1]) + Difference(right[0], right[^1]);
+        var classification = horizontalChange / (double)(textRegion.Height * 3) <= 18
+            && verticalChange / 6.0 <= 8
+            ? SourceCoverClass.Plain : SourceCoverClass.Gradient;
+
+        var mask = new bool[permittedArea.Width * permittedArea.Height];
+        var reconstruction = new byte[checked(permittedArea.Width * permittedArea.Height * 4)];
+        int candidates = 0;
+        for (int y = permittedArea.Top; y < permittedArea.Bottom; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int sampleRow = Math.Clamp(y - textRegion.Top, 0, textRegion.Height - 1);
+            for (int x = permittedArea.Left; x < permittedArea.Right; x++)
+            {
+                double t = (x - (textRegion.Left - sampleWidth / 2.0))
+                    / (textRegion.Width + sampleWidth);
+                var expected = Pixel.Lerp(left[sampleRow], right[sampleRow], Math.Clamp(t, 0, 1));
+                int local = (y - permittedArea.Top) * permittedArea.Width + x - permittedArea.Left;
+                int rebuilt = local * 4;
+                reconstruction[rebuilt] = expected.B;
+                reconstruction[rebuilt + 1] = expected.G;
+                reconstruction[rebuilt + 2] = expected.R;
+                reconstruction[rebuilt + 3] = 255;
+                if (!textRegion.Contains(x, y)) continue;
+                int source = y * stride + x * 4;
+                if (Math.Max(Math.Abs(sourceBgra32[source] - expected.B), Math.Max(
+                    Math.Abs(sourceBgra32[source + 1] - expected.G),
+                    Math.Abs(sourceBgra32[source + 2] - expected.R))) < 40) continue;
+                mask[local] = true;
+                candidates++;
+            }
+        }
+        if (candidates < 4 || candidates > textRegion.Width * textRegion.Height * 0.55) return null;
+        if (HasLargeNonTextComponent(mask, permittedArea, textRegion, candidates, cancellationToken)) return null;
+
+        var expanded = (bool[])mask.Clone();
+        for (int y = textRegion.Top; y < textRegion.Bottom; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (int x = textRegion.Left; x < textRegion.Right; x++)
+            {
+                int local = (y - permittedArea.Top) * permittedArea.Width + x - permittedArea.Left;
+                if (!mask[local]) continue;
+                for (int dy = -1; dy <= 1; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        int px = x + dx, py = y + dy;
+                        if (textRegion.Contains(px, py))
+                            expanded[(py - permittedArea.Top) * permittedArea.Width + px - permittedArea.Left] = true;
+                    }
+            }
+        }
+        mask = expanded;
+        int covered = 0, minX = textRegion.Right, minY = textRegion.Bottom, maxX = textRegion.Left, maxY = textRegion.Top;
+        for (int y = textRegion.Top; y < textRegion.Bottom; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (int x = textRegion.Left; x < textRegion.Right; x++)
+                if (mask[(y - permittedArea.Top) * permittedArea.Width + x - permittedArea.Left])
+                {
+                    covered++; minX = Math.Min(minX, x); minY = Math.Min(minY, y);
+                    maxX = Math.Max(maxX, x); maxY = Math.Max(maxY, y);
+                }
+        }
+        return new SourceCoverPlan(classification, image, permittedArea,
+            Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1), mask, reconstruction, covered);
+
+        Pixel Average(int startX, int endX, int y)
+        {
+            long b = 0, g = 0, r = 0;
+            for (int x = startX; x < endX; x++)
+            {
+                int offset = y * stride + x * 4;
+                b += sourceBgra32[offset]; g += sourceBgra32[offset + 1]; r += sourceBgra32[offset + 2];
+            }
+            int count = endX - startX;
+            return new Pixel((byte)(b / count), (byte)(g / count), (byte)(r / count));
+        }
+        void AccumulateError(int startX, int endX, int y, Pixel average)
+        {
+            for (int x = startX; x < endX; x++)
+            {
+                int offset = y * stride + x * 4;
+                sampleError += Math.Abs(sourceBgra32[offset] - average.B)
+                    + Math.Abs(sourceBgra32[offset + 1] - average.G)
+                    + Math.Abs(sourceBgra32[offset + 2] - average.R);
+                sampleCount++;
+            }
+        }
+    }
+
+    internal static void Validate(byte[] pixels, int width, int height, int stride)
+    {
+        ArgumentNullException.ThrowIfNull(pixels);
+        if (width <= 0 || height <= 0 || stride < checked(width * 4)
+            || pixels.Length < checked(stride * height))
+            throw new ArgumentException("Expected a complete BGRA32 image.", nameof(pixels));
+    }
+
+    private static int Difference(Pixel first, Pixel second) => Math.Abs(first.B - second.B)
+        + Math.Abs(first.G - second.G) + Math.Abs(first.R - second.R);
+
+    private static bool IsSmoothLinear(Pixel[] samples)
+    {
+        for (int row = 1; row < samples.Length - 1; row++)
+            if (Difference(samples[row], Pixel.Lerp(samples[0], samples[^1], row / (double)(samples.Length - 1))) > 60)
+                return false;
+        return true;
+    }
+
+    private static bool HasLargeNonTextComponent(bool[] mask, Rectangle permittedArea,
+        Rectangle textRegion, int candidateCount, CancellationToken cancellationToken)
+    {
+        var seen = new bool[mask.Length];
+        var pending = new int[candidateCount];
+        int minimumPixels = Math.Max(8, textRegion.Width * textRegion.Height / 5);
+        int minimumWidth = Math.Max(4, (textRegion.Width + 2) / 3);
+        int minimumHeight = Math.Max(4, (textRegion.Height + 2) / 3);
+        for (int y = textRegion.Top; y < textRegion.Bottom; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            for (int x = textRegion.Left; x < textRegion.Right; x++)
+            {
+                int start = (y - permittedArea.Top) * permittedArea.Width + x - permittedArea.Left;
+                if (!mask[start] || seen[start]) continue;
+                int top = 0, count = 0, minX = x, maxX = x, minY = y, maxY = y;
+                seen[start] = true;
+                pending[top++] = start;
+                while (top > 0)
+                {
+                    if ((count & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
+                    int current = pending[--top];
+                    int currentY = current / permittedArea.Width + permittedArea.Top;
+                    int currentX = current % permittedArea.Width + permittedArea.Left;
+                    count++;
+                    minX = Math.Min(minX, currentX); maxX = Math.Max(maxX, currentX);
+                    minY = Math.Min(minY, currentY); maxY = Math.Max(maxY, currentY);
+                    // ponytail: coarse component gate; use glyph segmentation if connected display lettering is needed.
+                    if (count >= minimumPixels && maxX - minX + 1 >= minimumWidth
+                        && maxY - minY + 1 >= minimumHeight) return true;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int nextX = currentX + dx, nextY = currentY + dy;
+                            if ((dx == 0 && dy == 0) || !textRegion.Contains(nextX, nextY)) continue;
+                            int next = (nextY - permittedArea.Top) * permittedArea.Width + nextX - permittedArea.Left;
+                            if (!mask[next] || seen[next]) continue;
+                            seen[next] = true;
+                            pending[top++] = next;
+                        }
+                }
+                int componentWidth = maxX - minX + 1, componentHeight = maxY - minY + 1;
+                // ponytail: near-span strokes are treated as chart connectors; use glyph segmentation to recover display text.
+                if ((componentWidth >= Math.Max(8, textRegion.Width * 3 / 4) && componentHeight <= 2)
+                    || (componentHeight >= Math.Max(8, textRegion.Height * 3 / 4) && componentWidth <= 2)) return true;
+                // ponytail: compact square components are treated as artwork; use glyph segmentation to recover dense display text.
+                if (count >= 12 && componentWidth >= 4 && componentHeight >= 4
+                    && componentWidth >= componentHeight * 0.65 && componentHeight >= componentWidth * 0.65
+                    && count >= componentWidth * componentHeight * 0.85) return true;
+            }
+        }
+        return false;
+    }
+
+    private readonly record struct Pixel(byte B, byte G, byte R)
+    {
+        public static Pixel Lerp(Pixel first, Pixel second, double amount) => new(
+            (byte)Math.Round(first.B * (1 - amount) + second.B * amount),
+            (byte)Math.Round(first.G * (1 - amount) + second.G * amount),
+            (byte)Math.Round(first.R * (1 - amount) + second.R * amount));
+    }
+}

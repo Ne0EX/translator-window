@@ -284,7 +284,8 @@ for line in sys.stdin:
             var task = (Task)completeFrame.Invoke(session, new object[] { bitmap, new Rectangle(0, 0, 800, 200), 0,
                 "en-comic", "th", SubtitleStyle.Overwrite, 6, CancellationToken.None, true, null!, false,
                 0L, Array.Empty<byte>(), 0L, recognizedCallback,
-                (Func<System.Windows.Media.Imaging.BitmapSource?, bool>)(_ => true), Task.CompletedTask })!;
+                (Func<System.Windows.Media.Imaging.BitmapSource?, bool>)(_ => true), Task.CompletedTask,
+                CaptionStyles.ResolveInstalled(new CaptionStyleOptions()) })!;
             await task;
             return task.GetType().GetProperty("Result")!.GetValue(task);
         }
