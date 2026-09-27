@@ -867,3 +867,52 @@ rebuilt app's live visual check remains pending: after the tests, Computer Use
 again showed terminal windows over Comet. Automatic approval review rejected
 capturing that overlap, and the Computer Use skill prohibits operating the
 terminals. The reader was asked to clear them; saved-view work continued.
+
+### Newly enclosed gaps in the source cover — 2026-09-28
+
+The footprint union can disconnect pale letter remnants from the exterior.
+Those newly enclosed gaps were still absent from the cover and forced narrow,
+offset caption lines. After a union actually adds pixels, the renderer now floods
+uncovered pixels from all four edges of the original text rectangle and fills
+only the holes that no longer reach an edge. The scan stays within that rectangle
+and the existing contour bounds, charges the existing work budget, and checks
+cancellation. Neighbor exclusions still run afterward. No flood-color threshold,
+font floor, model or dependency changes.
+
+On the matched 144-DPI capture, the repair fills 1,849 additional pixels. The
+upper-left caption increases from 27 to 32 DIP and changes from six to five
+complete lines; its cover remains `[695,283,267,409]`. The dark border at
+`[940,554]`, warm artwork at `[1030,325]`, and gold sparkle at `[793,939]` remain
+unchanged. The final lines are still offset, and faint remnants outside these
+enclosed holes remain: this is an improvement, not seamless reading acceptance.
+
+A fresh build of the previous implementation fails the new public cover probe
+at `[277,190]`; the repair passes. The synthetic diagonal-notch control protects
+independently drawn faint-border points and requires an off-detection source
+stroke to be covered. An earlier row/column closure was rejected: it erased
+286 additional border pixels in that same qualifying notch. The retained
+algorithm adds no damage there; 67 pixels already changed by the prior footprint
+path remain a documented limitation of that diagnostic.
+
+All 189 captions survive the 18-view comparison against the previous combined
+renderer, with no new margins or strict failures. Existing detection, recognition
+and missing-caption failures remain. Four views change rendered pixels (32, 39,
+43 and 46); only view 39 region 8 changes caption geometry, from width 61 to 75
+pixels at the same 18 DIP. Their output images were inspected.
+
+Two paired timing sequences, with order reversed for the second, keep repeated
+view medians at 3.79–4.13 ms for the repair versus 3.22–5.33 ms before it.
+First fresh-overlay samples are 932.72/937.10 ms versus 901.32/919.05 ms, an
+observed 18–31 ms increase. Later fresh-overlay samples vary substantially:
+385.14–577.22 ms versus 411.17–562.06 ms. These small samples do not establish a
+stable speed difference or live scrolling performance. No model inference ran
+during the measurements.
+
+Private RED/GREEN, notch and actual-source evidence is in
+`.cache/replay/upper-bubble-width-probe/supported-interior/`. The 18-view comparison
+is in `.cache/replay/senmanga-acceptance/enclosed-repair-comparison/`; paired
+timings are in `.cache/live-qa/region0-search/timing-*enclosed*.log`.
+
+The final Release renderer suite passes all 14 cases, including the strengthened
+notch control, and the complete session lifecycle suite passes. Fresh live visual
+verification and full chapter acceptance remain pending.

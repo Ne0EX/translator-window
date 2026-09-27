@@ -18,11 +18,9 @@ fill inside an enclosed bubble (including pale lettering outside its detection),
 unchanged bubble outlines and exterior pixels, preservation of a second passage
 awaiting translation, light captions on dark fills, and dominant source-ink color
 when the Auto preset is selected. These checks use the public renderer only.
-The readability cases require large black-on-white margin cards, complete opaque
-fill inside an enclosed bubble (including pale lettering outside its detection),
-unchanged bubble outlines and exterior pixels, preservation of a second passage
-awaiting translation, light captions on dark fills, and dominant source-ink color
-when the Auto preset is selected. These checks use the public renderer only.
+Pale gaps newly enclosed by a qualified source-lettering cover must also be
+filled. A diagonal notch checks that an exterior-connected faint border remains
+visible, while an off-detection lettering probe requires full-bubble coverage.
 The stylized fixture deliberately records one heading as
 `unresolved-before-recognized-text`; it verifies that the evidence keeps the
 missing passage separate from a successfully rendered body caption, rather than

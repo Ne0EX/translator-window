@@ -51,9 +51,62 @@ public sealed class SourceCoverPlan
                 covered++;
             }
         }
-        // Keep the closed bubble's reconstruction and contour bounds; only repair independently qualified source lettering.
-        return combined is null ? this : new SourceCoverPlan(Classification, image, PermittedArea,
+        if (combined is null) return this;
+
+        // Recovered lettering can enclose pale gaps that were connected to the exterior before the union.
+        // Fill only those holes inside the original text region; preserve every gap still reaching its edges.
+        var interior = Rectangle.Intersect(source, FootprintBounds);
+        int count = checked(interior.Width * interior.Height);
+        var exterior = new bool[count];
+        var pending = new int[count];
+        int head = 0, tail = 0;
+        for (int y = 0; y < interior.Height; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sampleRow(interior.Width);
+            Visit(y * interior.Width);
+            Visit((y + 1) * interior.Width - 1);
+        }
+        for (int x = 0; x < interior.Width; x++)
+        {
+            Visit(x);
+            Visit((interior.Height - 1) * interior.Width + x);
+        }
+        while (head < tail)
+        {
+            if ((head & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
+            int index = pending[head++], x = index % interior.Width, y = index / interior.Width;
+            if (x > 0) Visit(index - 1);
+            if (x + 1 < interior.Width) Visit(index + 1);
+            if (y > 0) Visit(index - interior.Width);
+            if (y + 1 < interior.Height) Visit(index + interior.Width);
+        }
+        for (int y = 0; y < interior.Height; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sampleRow(interior.Width);
+            for (int x = 0; x < interior.Width; x++)
+            {
+                int index = y * interior.Width + x;
+                int offset = (y + interior.Top - PermittedArea.Top) * PermittedArea.Width
+                    + x + interior.Left - PermittedArea.Left;
+                if (exterior[index] || combined[offset]) continue;
+                combined[offset] = true;
+                covered++;
+            }
+        }
+        return new SourceCoverPlan(Classification, image, PermittedArea,
             FootprintBounds, combined, reconstruction, covered);
+
+        void Visit(int index)
+        {
+            if (exterior[index]) return;
+            int offset = (index / interior.Width + interior.Top - PermittedArea.Top) * PermittedArea.Width
+                + index % interior.Width + interior.Left - PermittedArea.Left;
+            if (combined[offset]) return;
+            exterior[index] = true;
+            pending[tail++] = index;
+        }
     }
 
     internal SourceCoverPlan? Excluding(IReadOnlyList<Rectangle> areas, Action<int> sampleRow,

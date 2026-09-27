@@ -342,11 +342,14 @@ internal static class Program
                         ? ((byte)255, (byte)255, (byte)255)
                         : (exposedInkPixels[(y * fixture.Width + x) * 4 + 2],
                             exposedInkPixels[(y * fixture.Width + x) * 4 + 1], exposedInkPixels[(y * fixture.Width + x) * 4]));
+                Set(exposedInkPixels, fixture.Width, 269, 187, 227, 221, 213);
+                Set(exposedInkPixels, fixture.Width, 277, 190, 219, 236, 232);
                 var exposedInkFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
                     PixelFormats.Bgra32, null, exposedInkPixels, fixture.Width * 4);
                 exposedInkFrame.Freeze();
                 var exposedInkFixture = fixture with { Background = "source-ink-beside-highlight",
-                    WhiteSourceCoverPoints = new[] { new Box(265, 165, 1, 1), new Box(297, 221, 1, 1) } };
+                    WhiteSourceCoverPoints = new[] { new Box(265, 165, 1, 1), new Box(297, 221, 1, 1),
+                        new Box(269, 187, 1, 1), new Box(277, 190, 1, 1) } };
                 var exposedInkResult = Replay(exposedInkFixture, exposedInkFrame);
                 Verify(exposedInkFixture, exposedInkResult);
                 var exposedInkRendered = Pixels(exposedInkResult.Rendered);
@@ -356,6 +359,30 @@ internal static class Program
                         Require(exposedInkPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(exposedInkRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Covering lettering beside a pale highlight must preserve the outline and exterior artwork.");
+                var notchPixels = (byte[])exposedInkPixels.Clone();
+                for (int y = 105; y <= 210; y++)
+                for (int x = 248; x <= 330; x++)
+                {
+                    double t = Math.Clamp(((x - 260d) * 55 + (y - 105d) * 100) / 13025, 0, 1);
+                    double distance = Math.Sqrt(Math.Pow(x - (260 + t * 55), 2) + Math.Pow(y - (105 + t * 100), 2));
+                    if (distance < 7) Set(notchPixels, fixture.Width, x, y,
+                        distance < 4 ? (byte)255 : (byte)218,
+                        distance < 4 ? (byte)255 : (byte)218,
+                        distance < 4 ? (byte)255 : (byte)218);
+                }
+                var notchFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, notchPixels, fixture.Width * 4);
+                notchFrame.Freeze();
+                var notchFixture = fixture with { Background = "pale-diagonal-notch",
+                    WhiteSourceCoverPoints = new[] { new Box(293, 128, 1, 1) } };
+                var notchResult = Replay(notchFixture, notchFrame);
+                Verify(notchFixture, notchResult);
+                var notchRendered = Pixels(notchResult.Rendered);
+                foreach (var point in new[] { new Drawing.Point(284, 159), new Drawing.Point(303, 173),
+                    new Drawing.Point(312, 189), new Drawing.Point(316, 209) })
+                    for (int channel = 0; channel < 3; channel++)
+                        Require(notchRendered[(point.Y * fixture.Width + point.X) * 4 + channel] == 218,
+                            "A pale diagonal outline connected to the exterior must stay visible within the detected text rectangle.");
                 var tintedPixels = Pixels(frame);
                 for (int y = 105; y < 300; y++)
                 for (int x = 220; x < 375; x++)
