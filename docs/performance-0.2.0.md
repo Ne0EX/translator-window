@@ -339,3 +339,36 @@ caption-placement failure. Private source, diagnostics and inspected composite:
 `.cache/replay/live-bubble-followup/result/`. Browser chrome must not be counted
 as failed manga bubble placement. No new live animation smoothness claim or
 release acceptance follows from this check.
+
+## Fit translated text to the bubble area — 2026-09-27
+
+Reader correction: use the available bubble area, rather than shrinking a uniform
+text box or pushing text into side captions. Qualified Thai bubble layout now
+measures the filled contour over each proposed line's height. It chooses word
+breaks using each line's available width, allowing shorter edge lines and wider
+middle lines. Complete text, Thai word boundaries, source covers and outline
+protection remain required. The starting font size comes from the bubble height
+(up to 72 DIP), replacing the fixed 24-DIP ceiling for qualified containers.
+The existing 12-DIP floor remains. Cached visuals retain their line-height settings.
+
+The roomy-bubble public-renderer test failed at the old ceiling and now renders
+at 32 DIP, with all text inside the bubble and exterior pixels unchanged. All 14
+standard cases pass, including the long-passage, off-center detection, dark-fill,
+pending-text and replay stability checks. The layout/session lifecycle suite
+passes. An early contour-only version lost two local captions on the Comic Days
+capture, so it was rejected: the final code retains the existing local-placement
+fallback before margin captions. Final Comic Days and Senmanga counts remain
+6 local/11 margin and 4 local/4 margin, respectively; this change improves fitting
+and sizing, not recognition completeness or translation accuracy.
+
+Final repeated-view medians: Comic Days 2.32 ms, Senmanga 2.06 ms, Tameshiyo 2.51 ms.
+First layouts: 1,545 / 810 / 2,117 ms, including first-use work. These are separate
+replay runs, not a matched live FPS comparison. The existing Comic Days/Tameshiyo
+strict text-verification failures persist. No translation model or VRAM changes.
+
+Tradeoff: additional bounded contour scans and word-break search on a new layout;
+unchanged frames reuse captions. Contour search is limited to 64 word segments and
+16 lines, with centered lines; longer or asymmetric passages keep the established
+local fitter and, when necessary, the margin fallback. Private inspected examples:
+`.cache/replay/contour-standard/` and `.cache/replay/contour-real/`. General bubble
+segmentation, asymmetric placement and final visual acceptance remain open.

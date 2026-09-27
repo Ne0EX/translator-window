@@ -92,6 +92,8 @@ internal static class Program
             }
             if (fixture.Background == "bubble")
             {
+                Require(first.Items.Single(item => item.Kind == "caption").FontSize >= 28,
+                    "A roomy bubble must use a larger readable caption instead of the fixed 24-DIP ceiling.");
                 var cornerNeighbor = fixture with { Regions = fixture.Regions.Concat(new[] {
                     new RegionFixture("neighbor", new Box(225, 110, 12, 15), "pending", "") }).ToArray() };
                 Verify(fixture, Replay(cornerNeighbor, frame, allowMissing: true));

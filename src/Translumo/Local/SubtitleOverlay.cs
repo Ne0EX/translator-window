@@ -503,6 +503,8 @@ public sealed class SubtitleOverlay : Window
                             TextWrapping = translation.Any(character => character is >= '\u0e00' and <= '\u0e7f')
                                 ? TextWrapping.NoWrap : TextWrapping.Wrap,
                             TextAlignment = TextAlignment.Center,
+                            LineHeight = ((TextBlock)previous.Caption!.Child).LineHeight,
+                            LineStackingStrategy = ((TextBlock)previous.Caption.Child).LineStackingStrategy,
                             TextTrimming = TextTrimming.None
                         };
                         var cachedCaption = new Border { Tag = i, Background = cachedBackground,
@@ -529,8 +531,11 @@ public sealed class SubtitleOverlay : Window
             bool backgroundRejected = false;
             bool thai = translation.Any(character => character is >= '\u0e00' and <= '\u0e7f');
             var words = thai ? ThaiWords(translation) : null;
+            int largestFont = hasContainer
+                ? Math.Max(24, (int)Math.Min(72, placementArea.Height * scaleY / 2)) : 24;
             // Keep caption layout independent from source-cover padding.
-            foreach (double fontSize in CaptionFontSizes().Where(size => !japaneseToThai && !thai || size >= 12))
+            foreach (double fontSize in Enumerable.Range(0, largestFont - 7).Select(step => (double)(largestFont - step))
+                         .Where(size => !japaneseToThai && !thai || size >= 12))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 double bestScore = double.PositiveInfinity;
@@ -538,6 +543,26 @@ public sealed class SubtitleOverlay : Window
                     hasContainer ? placementArea.Width * scaleX
                         : Math.Min(320, Math.Max(80, source.Width * scaleX * 2.5)));
                 var lineWidths = new Dictionary<string, double>();
+                if (hasContainer && words is not null && sourceCovers[i]?.Plan is { } bubblePlan)
+                {
+                    var bubbleText = new TextBlock {
+                        Text = translation, FontFamily = appearance.Font, FontWeight = appearance.Weight,
+                        FontSize = fontSize, Language = XmlLanguage.GetLanguage("th-TH"),
+                        Foreground = appearance.Foreground, Effect = appearance.Effect,
+                        TextWrapping = TextWrapping.NoWrap, TextAlignment = TextAlignment.Center
+                    };
+                    if (FitBubbleLines(bubbleText, words, placementArea, captureBounds, bubblePlan,
+                            scaleX, scaleY, lineWidths, workBudget, cancellationToken, out var bubbleBounds)
+                        && !blockers.Any(other => other.IntersectsWith(bubbleBounds)))
+                    {
+                        caption = new Border { Tag = i, Background = Brushes.Transparent, Child = bubbleText };
+                        position = bubbleBounds;
+                        selectedFontSize = fontSize;
+                        displayText = bubbleText.Text;
+                        break;
+                    }
+                    if (fontSize > 24) continue;
+                }
                 foreach (double widthDip in new[] { source.Width * scaleX, (source.Width + 12) * scaleX,
                     source.Width * scaleX * 1.5, source.Width * scaleX * 2,
                     permittedLocalArea.Width * scaleX, maxWidthDip,
@@ -1226,6 +1251,81 @@ public sealed class SubtitleOverlay : Window
             bounds.Offset(capture.Location);
             return (patchBrush, bounds, Brushes.Transparent, background, plan);
         }
+    }
+
+    private static bool FitBubbleLines(TextBlock text, string[] words, Drawing.Rectangle bubble,
+        Drawing.Rectangle capture, SourceCoverPlan plan, double scaleX, double scaleY,
+        Dictionary<string, double> widths, RenderWorkBudget budget, CancellationToken cancellationToken,
+        out Drawing.Rectangle bounds)
+    {
+        bounds = Drawing.Rectangle.Empty;
+        // ponytail: bound contour search for dialogue; long passages retain the existing paragraph fitter.
+        if (words.Length > 64 || text.Text.Contains('\n')) return false;
+        text.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        int lineHeight = Math.Max(1, (int)Math.Ceiling(text.DesiredSize.Height / scaleY));
+        int center = bubble.Left + bubble.Width / 2;
+        var typeface = new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch);
+        // Centered lines follow the actual filled contour; unusual asymmetric bubbles may still use fallback.
+        for (int count = 1; count <= Math.Min(16, Math.Min(words.Length, (bubble.Height - 4) / lineHeight)); count++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            budget.CheckPlacement();
+            int top = bubble.Top + (bubble.Height - count * lineHeight) / 2;
+            var available = new double[count];
+            for (int line = 0; line < count; line++)
+            {
+                int radius = bubble.Width / 2;
+                for (int y = top + line * lineHeight; y < top + (line + 1) * lineHeight; y++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int left = center, right = center;
+                    while (left > bubble.Left && plan.Covers(left - 1 - capture.X, y - capture.Y)) left--;
+                    while (right < bubble.Right && plan.Covers(right - capture.X, y - capture.Y)) right++;
+                    budget.SampleBackgroundRow(right - left);
+                    radius = Math.Min(radius, Math.Min(center - left, right - center));
+                }
+                available[line] = Math.Max(0, radius * 2 - 4) * scaleX;
+            }
+            var costs = new double[count + 1, words.Length + 1];
+            var breaks = new int[count, words.Length];
+            for (int line = 0; line <= count; line++)
+            for (int start = 0; start <= words.Length; start++) costs[line, start] = double.PositiveInfinity;
+            costs[count, words.Length] = 0;
+            for (int line = count - 1; line >= 0; line--)
+            for (int start = words.Length - 1; start >= 0; start--)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string value = "";
+                for (int end = start; end < words.Length; end++)
+                {
+                    value += words[end];
+                    if (!widths.TryGetValue(value, out double width))
+                        widths[value] = width = new FormattedText(value, text.Language.GetEquivalentCulture(),
+                            text.FlowDirection, typeface, text.FontSize, text.Foreground,
+                            VisualTreeHelper.GetDpi(text).PixelsPerDip).WidthIncludingTrailingWhitespace;
+                    if (width > available[line]) break;
+                    double remaining = available[line] - width;
+                    double cost = remaining * remaining + costs[line + 1, end + 1];
+                    if (cost >= costs[line, start]) continue;
+                    costs[line, start] = cost;
+                    breaks[line, start] = end + 1;
+                }
+            }
+            if (double.IsPositiveInfinity(costs[0, 0])) continue;
+            var lines = new string[count];
+            for (int line = 0, start = 0; line < count; line++)
+            {
+                int end = breaks[line, start];
+                lines[line] = string.Concat(words.Skip(start).Take(end - start));
+                start = end;
+            }
+            text.Text = string.Join("\n", lines);
+            text.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+            text.LineHeight = lineHeight * scaleY;
+            bounds = new Drawing.Rectangle(bubble.Left, top, bubble.Width, count * lineHeight);
+            return true;
+        }
+        return false;
     }
 
     private static bool LinesFitCover(TextBlock text, Drawing.Rectangle bounds, Drawing.Rectangle capture,
