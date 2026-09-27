@@ -499,6 +499,7 @@ public sealed class SubtitleOverlay : Window
                             TextWrapping = translation.Any(character => character is >= '\u0e00' and <= '\u0e7f')
                                 ? TextWrapping.NoWrap : TextWrapping.Wrap,
                             TextAlignment = TextAlignment.Center,
+                            TextEffects = ((TextBlock)previous.Caption!.Child).TextEffects,
                             LineHeight = ((TextBlock)previous.Caption!.Child).LineHeight,
                             LineStackingStrategy = ((TextBlock)previous.Caption.Child).LineStackingStrategy,
                             TextTrimming = TextTrimming.None
@@ -587,6 +588,16 @@ public sealed class SubtitleOverlay : Window
                         }
                         if (wrapped is null) continue;
                         text.Text = wrapped;
+                    }
+                    else
+                    {
+                        var measured = new FormattedText(translation, text.Language.GetEquivalentCulture(),
+                            text.FlowDirection, new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch),
+                            fontSize, text.Foreground, VisualTreeHelper.GetDpi(text).PixelsPerDip) {
+                            MaxTextWidth = contentWidth, Trimming = TextTrimming.None
+                        };
+                        // TextBlock clamps DesiredSize to its constraint even when a single glyph overflows.
+                        if (measured.WidthIncludingTrailingWhitespace > contentWidth) continue;
                     }
                     text.Measure(new Size(contentWidth, double.PositiveInfinity));
                     int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
@@ -1259,28 +1270,35 @@ public sealed class SubtitleOverlay : Window
         if (words.Length > 64 || text.Text.Contains('\n')) return false;
         text.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         int lineHeight = Math.Max(1, (int)Math.Ceiling(text.DesiredSize.Height / scaleY));
-        int center = bubble.Left + bubble.Width / 2;
         var typeface = new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch);
-        // Centered lines follow the actual filled contour; unusual asymmetric bubbles may still use fallback.
+        // Each line uses a contiguous strip contained by the contour throughout its full height.
         for (int count = 1; count <= Math.Min(16, (bubble.Height - 4) / lineHeight); count++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             budget.CheckPlacement();
             int top = bubble.Top + (bubble.Height - count * lineHeight) / 2;
             var available = new double[count];
+            var centers = new double[count];
             for (int line = 0; line < count; line++)
             {
-                int radius = bubble.Width / 2;
+                var common = new bool[bubble.Width];
+                Array.Fill(common, true);
                 for (int y = top + line * lineHeight; y < top + (line + 1) * lineHeight; y++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    int left = center, right = center;
-                    while (left > bubble.Left && plan.Covers(left - 1 - capture.X, y - capture.Y)) left--;
-                    while (right < bubble.Right && plan.Covers(right - capture.X, y - capture.Y)) right++;
-                    budget.SampleBackgroundRow(right - left);
-                    radius = Math.Min(radius, Math.Min(center - left, right - center));
+                    budget.SampleBackgroundRow(bubble.Width);
+                    for (int x = 0; x < common.Length; x++)
+                        common[x] &= plan.Covers(bubble.Left + x - capture.X, y - capture.Y);
                 }
-                available[line] = Math.Max(0, radius * 2 - 4) * scaleX;
+                int bestLeft = 0, bestWidth = 0;
+                for (int x = 0, start = 0; x <= common.Length; x++)
+                {
+                    if (x < common.Length && common[x]) continue;
+                    if (x - start > bestWidth) { bestLeft = start; bestWidth = x - start; }
+                    start = x + 1;
+                }
+                available[line] = Math.Max(0, bestWidth - 4) * scaleX;
+                centers[line] = bestLeft + bestWidth / 2d;
             }
             var costs = new double[count + 1, words.Length + 1];
             var breaks = new int[count, words.Length];
@@ -1321,6 +1339,13 @@ public sealed class SubtitleOverlay : Window
             text.Text = string.Join("\n", lines);
             text.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
             text.LineHeight = lineHeight * scaleY;
+            var effects = new TextEffectCollection();
+            for (int line = 0, start = 0; line < lines.Length; start += lines[line++].Length + 1)
+                if (lines[line].Length > 0 && centers[line] != bubble.Width / 2d)
+                    effects.Add(new TextEffect { PositionStart = start, PositionCount = lines[line].Length,
+                        Transform = new TranslateTransform((centers[line] - bubble.Width / 2d) * scaleX, 0) });
+            effects.Freeze();
+            text.TextEffects = effects;
             bounds = new Drawing.Rectangle(bubble.Left, top, bubble.Width, count * lineHeight);
             return true;
         }

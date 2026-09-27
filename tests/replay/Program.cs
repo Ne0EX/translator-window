@@ -90,6 +90,29 @@ internal static class Program
                 Require(Pixels(frame).AsSpan(offset, 4).SequenceEqual(Pixels(pending.Rendered).AsSpan(offset, 4)),
                     "Heading cover must preserve ink belonging to a pending overlapping region.");
             }
+            if (fixture.Background == "small-bubble")
+            {
+                var ellipsis = fixture with { Regions = new[] {
+                    fixture.Regions[0] with { Translation = "…" } } };
+                var ellipsisResult = Replay(ellipsis, frame);
+                Verify(ellipsis, ellipsisResult);
+                var caption = ellipsisResult.Items.Single(item => item.Kind == "caption").Bounds.Drawing;
+                var ellipsisPixels = Pixels(ellipsisResult.Rendered);
+                var dotWidths = new List<int>();
+                int dotWidth = 0;
+                for (int x = caption.Left; x < caption.Right; x++)
+                {
+                    bool ink = false;
+                    for (int y = caption.Top; y < caption.Bottom; y++)
+                        ink |= ellipsisPixels[(y * fixture.Width + x) * 4] < 128;
+                    Require(!ink || x > caption.Left && x < caption.Right - 1,
+                        "Ellipsis ink must leave an empty pixel at both horizontal caption edges.");
+                    if (ink) dotWidth++;
+                    else if (dotWidth > 0) { dotWidths.Add(dotWidth); dotWidth = 0; }
+                }
+                Require(dotWidths.Count == 3 && dotWidths.Max() - dotWidths.Min() <= 1,
+                    "A single ellipsis glyph in a narrow bubble must render three complete dots of matching width.");
+            }
             if (fixture.Background == "bubble")
             {
                 Require(first.Items.Single(item => item.Kind == "caption").FontSize >= 28,
@@ -100,6 +123,17 @@ internal static class Program
                 var roundedDetection = fixture with { Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(235, 145, 120, 120) } } };
                 Verify(roundedDetection, Replay(roundedDetection, frame));
+                var punctuationPixels = Pixels(frame);
+                Paint(punctuationPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(272, 155, 5, 4),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                var punctuationFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, punctuationPixels, fixture.Width * 4);
+                punctuationFrame.Freeze();
+                var punctuationResult = Replay(fixture, punctuationFrame);
+                Verify(fixture, punctuationResult);
+                Require(punctuationResult.Items.Single(item => item.Kind == "caption").FontSize >= 28
+                    && Pixels(punctuationResult.Rendered)[(156 * fixture.Width + 273) * 4] == 248,
+                    "A punctuation-sized compact mark inside detected text must be covered and retain roomy bubble layout.");
                 var counterPixels = Pixels(frame);
                 Paint(counterPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(310, 258, 16, 17),
                     (x, y) => x < 312 || x >= 324 || y < 260 || y >= 273
@@ -227,6 +261,17 @@ internal static class Program
                 var offsetResult = Replay(offsetBubble, offsetFrame);
                 Verify(offsetBubble, offsetResult);
                 var offsetRendered = Pixels(offsetResult.Rendered);
+                foreach (var lobe in new[] { new Drawing.Rectangle(304, 126, 40, 48),
+                    new Drawing.Rectangle(248, 218, 74, 58) })
+                {
+                    int translatedInk = 0;
+                    for (int y = lobe.Top; y < lobe.Bottom; y++)
+                    for (int x = lobe.Left; x < lobe.Right; x++)
+                        if (offsetPixels[(y * fixture.Width + x) * 4] == 248
+                            && offsetRendered[(y * fixture.Width + x) * 4] < 128) translatedInk++;
+                    Require(translatedInk >= 8,
+                        "Offset joined captions must use both lobes, with translated glyphs following each lobe's horizontal position.");
+                }
                 Require(offsetRendered[(140 * fixture.Width + 321) * 4] == 248,
                     "Offset joined bubbles must cover the upper lobe's source ink even when the OCR corners lie outside.");
                 for (int y = 105; y < 310; y++)

@@ -387,9 +387,13 @@ public static class SourceCover
                 if ((componentWidth >= Math.Max(8, textRegion.Width * 3 / 4) && componentHeight <= 2)
                     || (componentHeight >= Math.Max(8, textRegion.Height * 3 / 4) && componentWidth <= 2)) return true;
                 // ponytail: near-solid compact components are treated as artwork; glyph segmentation is needed to distinguish them fully.
+                // Keep tiny punctuation inside detected lettering; this size heuristic does not classify general artwork.
+                bool smallPunctuation = letteringArea is { } source
+                    && source.Contains(new Rectangle(minX, minY, componentWidth, componentHeight))
+                    && Math.Max(componentWidth, componentHeight) * 6 <= Math.Min(source.Width, source.Height);
                 if (count >= 12 && componentWidth >= 4 && componentHeight >= 4
                     && componentWidth >= componentHeight * 0.65 && componentHeight >= componentWidth * 0.65
-                    && count >= componentWidth * componentHeight * 0.95) return true;
+                    && count >= componentWidth * componentHeight * 0.95 && !smallPunctuation) return true;
             }
         }
         return false;

@@ -439,3 +439,54 @@ stylized text, open-edge bubbles and translation-meaning errors. A processing
 command's caption count only covers recognized regions. It does not establish
 that every required source passage was found. Full chapter acceptance and the
 v0.2.0 release gate remain open.
+
+## Offset bubbles and punctuation — 2026-09-28
+
+Three further public-renderer regressions failed before their corrections:
+
+- Offset joined bubbles now position each line within its own safe horizontal
+  strip. WPF text effects preserve normal text shaping and cached placement.
+  The test requires visible translated glyphs in both lobes, complete text,
+  and unchanged outline/exterior pixels.
+- A narrow caption could report complete text while clipping the ellipsis
+  glyph. Candidate widths now also have to contain measured wrapped glyphs;
+  the regression checks the rendered dots.
+- A small source ellipsis dot was classified as compact artwork, rejecting a
+  normal closed bubble. Compact marks wholly inside the detected text and no
+  larger than one sixth of its shorter dimension are now treated as possible
+  punctuation. Larger compact components and marks outside the detection keep
+  the artwork guard. This is a size heuristic, not general glyph segmentation.
+
+| Private captured view | Observed change |
+| --- | --- |
+| 07, offset joined speech | 13 → 16 DIP; both lobes now used |
+| 15, joined question | 14 → 17 DIP; leading punctuation still attaches to the following word |
+| 19, ellipsis | Clipped 27-DIP glyph → complete three-dot glyph at 22 DIP |
+| 24, narrow oval | Margin → two local lines at 20 DIP; all-region replay also keeps the other bubble local at 18 DIP |
+
+All 14 standard cases pass. The final punctuation run's repeated-view medians
+were 0.16–1.14 ms, with a 4.15 ms worst repeat. Dense fixed-result views 03, 04,
+and 19 also passed without exhausting the existing work budget; their repeated
+medians were 1.78 / 2.78 / 1.84 ms. First layouts in those separate runs took
+0.938 / 1.272 / 0.873 seconds. These are renderer measurements, not live FPS or
+translation latency. The additional contour scans and glyph measurements run
+when fitting new captions; unchanged views retain reuse. No model was added.
+The integrated Release publish and session lifecycle checks pass, including
+navigation invalidation, progressive captions, recovery and Stop. Publish retains
+the existing NU1900 advisory-feed and WFAC010 manifest-DPI warnings.
+
+Full processing of saved views 23–26 on the published `92610a8` baseline passed
+the recognized-region checks. The visual audit still finds a textured apology
+bubble in the margin, an open-edge bubble, and translation-meaning errors.
+An earlier joined greeting still has a small source-cover boundary leak; its
+strict annotated-container check remains failing. Source lettering over artwork
+and special-lettering detection gaps also remain. The private source-coverage
+inventory distinguishes these from ordinary-bubble detection failures.
+
+The rebuilt baseline ran through Computer Use and reported seven translated
+blocks, 19 ms capture, 280 ms processing and 0 ms reused layout at one settled
+view. Subsequent live capture was interrupted by unrelated windows in the
+capture; automatic approval review rejected those screenshots. The reader
+cleared Discord, but an overlapping terminal still prevented the next capture.
+These events do not establish current-build navigation or full chapter acceptance.
+Evidence remains local under `.cache/replay/senmanga-acceptance/`.
