@@ -98,6 +98,7 @@ public static class SourceCover
             samples[i] = (x, y, new Pixel(pixels[offset], pixels[offset + 1], pixels[offset + 2]));
         }
         int selected = 0, support = 0;
+        long nearest = long.MaxValue;
         for (int i = 0; i < samples.Length; i++)
         {
             int matches = 0;
@@ -105,7 +106,11 @@ public static class SourceCover
                 if (Math.Abs(sample.Color.B - samples[i].Color.B) <= 16
                     && Math.Abs(sample.Color.G - samples[i].Color.G) <= 16
                     && Math.Abs(sample.Color.R - samples[i].Color.R) <= 16) matches++;
-            if (matches > support) { support = matches; selected = i; }
+            int dx = samples[i].X * 2 - text.Left - text.Right;
+            int dy = samples[i].Y * 2 - text.Top - text.Bottom;
+            long distance = (long)dx * dx + (long)dy * dy;
+            if (matches > support || matches == support && distance < nearest)
+            { support = matches; nearest = distance; selected = i; }
         }
         var (seedX, seedY, fill) = samples[selected];
         int count = search.Width * search.Height;
@@ -151,16 +156,18 @@ public static class SourceCover
         var holes = new bool[count];
         for (int index = 0; index < count; index++)
         {
-            holes[index] = !exterior[index] && !inside[index];
+            int offset = ((index / search.Width + search.Top) * width + index % search.Width + search.Left) * 4;
+            // Enclosed white counters belong to the bubble fill, not the glyph's ink density.
+            holes[index] = !exterior[index] && !inside[index]
+                && (Math.Abs(pixels[offset] - fill.B) > 16 || Math.Abs(pixels[offset + 1] - fill.G) > 16
+                    || Math.Abs(pixels[offset + 2] - fill.R) > 16);
             if (holes[index]) ink++;
             inside[index] = !exterior[index];
             if (inside[index]) covered++;
         }
         if (ink < 4 || ink > covered * 0.35
-            || HasLargeNonTextComponent(holes, search, bounds, ink, cancellationToken)) return null;
-        for (int y = text.Top; y < text.Bottom; y++)
-        for (int x = text.Left; x < text.Right; x++)
-            if (!inside[(y - search.Top) * search.Width + x - search.Left]) return null;
+            || HasLargeNonTextComponent(holes, search, bounds, ink, cancellationToken, text)) return null;
+        // OCR corners can cross the exterior of offset joined bubbles; only the qualified contour is painted.
         var reconstruction = new byte[count * 4];
         for (int i = 0; i < count; i++)
         {
@@ -331,7 +338,7 @@ public static class SourceCover
     }
 
     private static bool HasLargeNonTextComponent(bool[] mask, Rectangle permittedArea,
-        Rectangle textRegion, int candidateCount, CancellationToken cancellationToken)
+        Rectangle textRegion, int candidateCount, CancellationToken cancellationToken, Rectangle? letteringArea = null)
     {
         var seen = new bool[mask.Length];
         var pending = new int[candidateCount];
@@ -372,13 +379,17 @@ public static class SourceCover
                         }
                 }
                 int componentWidth = maxX - minX + 1, componentHeight = maxY - minY + 1;
+                // ponytail: connected ink taller than the source region's width can be artwork; touching vertical glyphs need segmentation.
+                if (letteringArea is { } lettering && count >= candidateCount / 5
+                    && componentWidth >= lettering.Width / 2d && componentHeight > lettering.Width
+                    && componentHeight > lettering.Height / 2d) return true;
                 // ponytail: near-span strokes are treated as chart connectors; use glyph segmentation to recover display text.
                 if ((componentWidth >= Math.Max(8, textRegion.Width * 3 / 4) && componentHeight <= 2)
                     || (componentHeight >= Math.Max(8, textRegion.Height * 3 / 4) && componentWidth <= 2)) return true;
-                // ponytail: compact square components are treated as artwork; use glyph segmentation to recover dense display text.
+                // ponytail: near-solid compact components are treated as artwork; glyph segmentation is needed to distinguish them fully.
                 if (count >= 12 && componentWidth >= 4 && componentHeight >= 4
                     && componentWidth >= componentHeight * 0.65 && componentHeight >= componentWidth * 0.65
-                    && count >= componentWidth * componentHeight * 0.85) return true;
+                    && count >= componentWidth * componentHeight * 0.95) return true;
             }
         }
         return false;

@@ -494,6 +494,28 @@ def request_progress(request):
     return progress
 
 
+def recognition_crops(image, region):
+    x, y, width, height = (region[key] for key in ("x", "y", "width", "height"))
+    cuts = [0, height]
+    if height >= width * 2 and width >= 12:
+        gray = cv2.cvtColor(image[y:y + height, x:x + width], cv2.COLOR_BGR2GRAY)
+        clear = np.all(gray >= 220, axis=1)
+        starts = np.flatnonzero(clear & ~np.r_[False, clear[:-1]])
+        stops = np.flatnonzero(clear & ~np.r_[clear[1:], False]) + 1
+        gaps = [(stop - start, start, stop) for start, stop in zip(starts, stops)
+                if stop - start >= max(12, width / 4)
+                and start >= width / 2 and height - stop >= width / 2]
+        if gaps:
+            # ponytail: one wide white separator handles joined vertical passages;
+            # textured backgrounds or more lobes need stronger text segmentation.
+            _, start, stop = max(gaps)
+            cuts.insert(1, (start + stop) // 2)
+    return [image[max(0, y + start - (8 if start == 0 else 0)):
+                  min(image.shape[0], y + stop + (8 if stop == height else 0)),
+                  max(0, x - 8):min(image.shape[1], x + width + 8)]
+            for start, stop in zip(cuts, cuts[1:])]
+
+
 def process_image(image, language, known, detector, get_recognizer, progress=False, emit=None):
     regions = detector.detect(image)
     if language == "ja":
@@ -511,19 +533,21 @@ def process_image(image, language, known, detector, get_recognizer, progress=Fal
             return {"regions": regions, "reused": reused}
         from PIL import Image
         recognizer = get_recognizer()
-        crops = [Image.fromarray(cv2.cvtColor(
-            image[max(0, region["y"] - 8):min(height, region["y"] + region["height"] + 8),
-                  max(0, region["x"] - 8):min(width, region["x"] + region["width"] + 8)],
-            cv2.COLOR_BGR2RGB,
-        )) for _, region in pending]
-        batch_size = 8 if progress else 64
+        crops = [[Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                  for crop in recognition_crops(image, region)] for _, region in pending]
+        batch_size = 8 if progress else 32  # At most two crops per region; recognizer accepts 64.
         for offset in range(0, len(crops), batch_size):
             batch = pending[offset:offset + batch_size]
-            texts = recognizer.recognize(crops[offset:offset + batch_size])
-            if len(texts) != len(batch) or any(not isinstance(text, str) for text in texts):
+            groups = crops[offset:offset + batch_size]
+            texts = recognizer.recognize([crop for group in groups for crop in group])
+            if len(texts) != sum(map(len, groups)) or any(not isinstance(text, str) for text in texts):
                 raise ValueError("Local manga recognizer returned invalid text.")
             recognized = []
-            for (index, region), text in zip(batch, texts):
+            cursor = 0
+            for (index, region), group in zip(batch, groups):
+                parts = texts[cursor:cursor + len(group)]
+                cursor += len(group)
+                text = "".join(parts) if all(part.strip() for part in parts) else ""
                 if text.strip():
                     region["text"] = text
                     recognized.append({"index": index, "text": text})

@@ -372,3 +372,70 @@ unchanged frames reuse captions. Contour search is limited to 64 word segments a
 local fitter and, when necessary, the margin fallback. Private inspected examples:
 `.cache/replay/contour-standard/` and `.cache/replay/contour-real/`. General bubble
 segmentation, asymmetric placement and final visual acceptance remain open.
+
+## Senmanga reading acceptance follow-up — 2026-09-28
+
+The current chapter was opened in Comet with Computer Use. The rebuilt app ran
+in window capture mode, processed successive views after scrolling, and stopped
+through its Stop control. One settled status reported 11 translated blocks,
+19 ms capture, 383 ms processing and 0 ms layout. These status fields are not
+first-caption latency or an animation/FPS measurement. Windows capture excludes
+the caption layer, so source screenshots alone cannot establish live visual
+acceptance. The source captures and inspected renderer composites remain private
+under `.cache/replay/senmanga-acceptance/`.
+
+The reading checks exposed several shared causes, now covered by renderer
+regressions and private captured-view replays:
+
+- A prior margin placement remained cached after the captured view changed,
+  preventing a return to the bubble. Changed views now retry local fitting;
+  identical views retain visual reuse. The regression renders bubble, artwork,
+  then bubble on one overlay and requires the original complete caption, font
+  and geometry to return without a margin badge.
+- Rectangular detections of joined bubbles include exterior corners. Requiring
+  every rectangle pixel inside the fill rejected usable containers. An interim
+  95% threshold still rejected offset lobes and was removed. Covers paint only
+  the closed contour; bounding, area, ink and neighboring-source checks remain.
+  Equal-color seed candidates now prefer the point nearest the source center.
+- White counters inside Japanese glyphs inflated the artwork detector's ink
+  density. It now counts actual ink and reserves the compact-artwork rejection
+  for near-solid components. A separate connected-artwork guard caught a real
+  hair-region regression. Caption placement also stops treating an unqualified
+  source rectangle as if an opaque cover already protected it.
+- Tall, narrow detections can belong to wider bubbles. Horizontal search now
+  includes the detection height, within the existing work and pixel budgets.
+- A narrow connecting neck may remain empty while complete words occupy both
+  lobes. Empty rows count toward the existing 16-row limit, rather than being
+  restricted by the number of words. No font-floor reduction or text shortening
+  was introduced.
+- The recognizer omitted a lower passage when a tall joined crop was squeezed
+  into one model input. One sufficiently wide white separator can now produce
+  two recognition crops, concatenated under the original region geometry. Inner
+  cuts have no overlapping padding. The saved two-passage case fails before
+  this correction and passes after it; the adjacent joined view retains its
+  recognized text. Existing protocol checks also pass.
+
+The final isolated standard run passes all 14 cases, with repeated-view medians
+of 0.21–0.93 ms and a 3.31 ms worst repeat. Positive tests still require complete
+captions. Two artwork/pending-ink negative cases may reject placement when no
+safe margin exists; rejection must leave an empty caption layer and preserve
+the protected source pixels. A real hair-protection replay also passes.
+
+Observed local results include a connected caption at 24 DIP, a spiked thought
+bubble at 14 DIP, a wider warning bubble at 24 DIP, and a grade-reaction bubble
+improving from 12 to 21 DIP. Offset joined captions now render locally, but
+centered lines leave some upper lobes unused. Contextual ICU segmentation can
+still split a colloquial Thai word poorly. One connected white region slightly
+whitens five floor pixels outside the intended bubble (maximum 26 gray levels);
+container-boundary quality is not yet a general guarantee.
+
+Tradeoff: broader bounded searches and extra line arrangements add work on new
+views; a qualified joined passage can require one additional recognition crop.
+Unchanged views still reuse captions. No additional model or VRAM allocation
+for a new model was introduced; the extra OCR latency has not been isolated.
+
+The continuing chapter audit also finds source lettering over artwork, missed
+stylized text, open-edge bubbles and translation-meaning errors. A processing
+command's caption count only covers recognized regions. It does not establish
+that every required source passage was found. Full chapter acceptance and the
+v0.2.0 release gate remain open.

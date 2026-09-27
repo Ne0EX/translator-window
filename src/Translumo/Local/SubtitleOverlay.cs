@@ -471,12 +471,8 @@ public sealed class SubtitleOverlay : Window
                 && previous.Translation == translation && previous.SourceText == regions[i].Text
                 && previous.Source == source)
             {
-                if (previous.Caption is null || !sameCaptionFrame && previous.Badge is not null)
+                if (sameCaptionFrame && previous.Caption is null)
                 {
-                    if (!sameCaptionFrame && previous.Badge is not null)
-                        captionCache[i] = previous with { Caption = null, Bounds = Drawing.Rectangle.Empty,
-                            Badge = null, BadgeBounds = Drawing.Rectangle.Empty, FontSize = 0,
-                            DisplayText = string.Empty };
                     marginIndices.Add(i);
                     continue;
                 }
@@ -487,7 +483,7 @@ public sealed class SubtitleOverlay : Window
                     if (previous.Badge is not null) visuals.Add((previous.Badge, previous.BadgeBounds));
                     continue;
                 }
-                else
+                else if (previous.Caption is not null && previous.Badge is null)
                 {
                     var cachedBackground = BackgroundBrush(previous.Bounds, cover, captureBounds, backgroundPixels,
                         frame, style, sourceCovers[i]?.Caption, sourceCovers[i]?.Bounds,
@@ -1109,7 +1105,7 @@ public sealed class SubtitleOverlay : Window
         bool transparentQualifiedCover = ReferenceEquals(qualifiedSourceCover, Brushes.Transparent);
         if (mask.Contains(caption) && !transparentQualifiedCover) return qualifiedSourceCover;
         var protectedArea = transparentQualifiedCover && qualifiedFootprint.HasValue
-            ? qualifiedFootprint.Value : mask;
+            ? qualifiedFootprint.Value : qualifiedSourceCover is not null ? mask : Drawing.Rectangle.Empty;
         int samples = 0, minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
         long totalR = 0, totalG = 0, totalB = 0;
         for (int y = caption.Top; y < caption.Bottom; y++)
@@ -1188,7 +1184,7 @@ public sealed class SubtitleOverlay : Window
             localSource.Offset(-capture.X, -capture.Y);
             localMask.Offset(-capture.X, -capture.Y);
             var search = localSource;
-            search.Inflate(Math.Max(96, localSource.Width), Math.Max(96, localSource.Height));
+            search.Inflate(Math.Max(96, Math.Max(localSource.Width, localSource.Height)), Math.Max(96, localSource.Height));
             search.Intersect(new Drawing.Rectangle(0, 0, capture.Width, capture.Height));
             var plan = display?.Cover ?? (workBudget.TryBubble(search.Width * search.Height)
                 ? SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
@@ -1266,7 +1262,7 @@ public sealed class SubtitleOverlay : Window
         int center = bubble.Left + bubble.Width / 2;
         var typeface = new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch);
         // Centered lines follow the actual filled contour; unusual asymmetric bubbles may still use fallback.
-        for (int count = 1; count <= Math.Min(16, Math.Min(words.Length, (bubble.Height - 4) / lineHeight)); count++)
+        for (int count = 1; count <= Math.Min(16, (bubble.Height - 4) / lineHeight); count++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             budget.CheckPlacement();
@@ -1295,6 +1291,9 @@ public sealed class SubtitleOverlay : Window
             for (int start = words.Length - 1; start >= 0; start--)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                // A narrow neck can remain empty while complete words use the adjoining lobes.
+                costs[line, start] = available[line] * available[line] + costs[line + 1, start];
+                breaks[line, start] = start;
                 string value = "";
                 for (int end = start; end < words.Length; end++)
                 {

@@ -85,7 +85,7 @@ internal static class Program
                 var guarded = fixture with { LocalHeadings = null, SourceInkPoints = null,
                     Regions = fixture.Regions.Concat(new[] {
                         new RegionFixture("pending", new Box(224, 205, 3, 12), "pending", "") }).ToArray() };
-                var pending = Replay(guarded, frame, allowMissing: true);
+                var pending = Replay(guarded, frame, allowMissing: true, allowLayoutRejection: true);
                 int offset = (205 * fixture.Width + 225) * 4;
                 Require(Pixels(frame).AsSpan(offset, 4).SequenceEqual(Pixels(pending.Rendered).AsSpan(offset, 4)),
                     "Heading cover must preserve ink belonging to a pending overlapping region.");
@@ -97,11 +97,147 @@ internal static class Program
                 var cornerNeighbor = fixture with { Regions = fixture.Regions.Concat(new[] {
                     new RegionFixture("neighbor", new Box(225, 110, 12, 15), "pending", "") }).ToArray() };
                 Verify(fixture, Replay(cornerNeighbor, frame, allowMissing: true));
+                var roundedDetection = fixture with { Regions = new[] {
+                    fixture.Regions[0] with { Bounds = new Box(235, 145, 120, 120) } } };
+                Verify(roundedDetection, Replay(roundedDetection, frame));
+                var counterPixels = Pixels(frame);
+                Paint(counterPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(310, 258, 16, 17),
+                    (x, y) => x < 312 || x >= 324 || y < 260 || y >= 273
+                        ? ((byte)18, (byte)18, (byte)18) : ((byte)248, (byte)248, (byte)248));
+                var counterFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, counterPixels, fixture.Width * 4);
+                counterFrame.Freeze();
+                Verify(fixture, Replay(fixture, counterFrame));
+                Paint(counterPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(310, 258, 16, 17),
+                    (x, y) => x >= 315 && x < 321 && y >= 263 && y < 267
+                        ? ((byte)248, (byte)248, (byte)248) : ((byte)18, (byte)18, (byte)18));
+                counterFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, counterPixels, fixture.Width * 4);
+                counterFrame.Freeze();
+                Verify(fixture, Replay(fixture, counterFrame));
+                Paint(counterPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(310, 258, 16, 17),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                var compactArtwork = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, counterPixels, fixture.Width * 4);
+                compactArtwork.Freeze();
+                var protectedCompactArtwork = Replay(fixture, compactArtwork);
+                var protectedPixels = Pixels(protectedCompactArtwork.Rendered);
+                for (int y = 258; y < 275; y++)
+                for (int x = 310; x < 326; x++)
+                    Require(protectedPixels[(y * fixture.Width + x) * 4] == 18,
+                        "A solid compact artwork component outside the text region must not be filled as lettering.");
+                var connectedArtwork = Pixels(frame);
+                Paint(connectedArtwork, fixture.Width, fixture.Height, new Drawing.Rectangle(252, 160, 44, 84),
+                    (x, y) => Math.Abs(x - 252 - (y - 160) / 2) <= 1
+                        ? ((byte)18, (byte)18, (byte)18)
+                        : (connectedArtwork[(y * fixture.Width + x) * 4 + 2],
+                            connectedArtwork[(y * fixture.Width + x) * 4 + 1],
+                            connectedArtwork[(y * fixture.Width + x) * 4]));
+                var connectedArtworkFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, connectedArtwork, fixture.Width * 4);
+                connectedArtworkFrame.Freeze();
+                var connectedArtworkResult = Replay(fixture with { Background = "artwork" }, connectedArtworkFrame,
+                    allowLayoutRejection: true);
+                Require(Pixels(connectedArtworkResult.Rendered)[(160 * fixture.Width + 252) * 4] == 18,
+                    "Artwork connected through lettering must remain visible outside the text region.");
+                Require(Pixels(connectedArtworkResult.Rendered)[(215 * fixture.Width + 280) * 4] == 18,
+                    "A rejected source cover must not authorize caption paint over artwork inside the text region.");
+                foreach (bool narrowGlyph in new[] { false, true })
+                {
+                    var glyphPixels = Pixels(frame);
+                    Paint(glyphPixels, fixture.Width, fixture.Height, fixture.Regions[0].Bounds.Drawing,
+                        (_, _) => ((byte)248, (byte)248, (byte)248));
+                    var glyph = narrowGlyph ? new Drawing.Rectangle(294, 151, 8, 100)
+                        : new Drawing.Rectangle(275, 172, 40, 40);
+                    Paint(glyphPixels, fixture.Width, fixture.Height, glyph,
+                        (x, y) => narrowGlyph || x < glyph.Left + 4 || x >= glyph.Right - 4
+                            || y < glyph.Top + 4 || y >= glyph.Bottom - 4
+                            ? ((byte)18, (byte)18, (byte)18) : ((byte)248, (byte)248, (byte)248));
+                    var glyphFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                        PixelFormats.Bgra32, null, glyphPixels, fixture.Width * 4);
+                    glyphFrame.Freeze();
+                    var glyphFixture = narrowGlyph ? fixture with { Regions = new[] {
+                        fixture.Regions[0] with { Bounds = new Box(282, 143, 32, 120) } } } : fixture;
+                    Verify(glyphFixture, Replay(glyphFixture, glyphFrame));
+                }
                 var narrowDetection = fixture with { Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(282, 143, 32, 120),
                         Translation = "ฉันจะใช้ความสามารถทั้งหมดที่มี เพื่อทำให้ความปรารถนาของฉันเป็นจริง" } } };
                 var narrowResult = Replay(narrowDetection, BuildFrame(narrowDetection));
                 Verify(narrowDetection, narrowResult);
+                var joined = narrowDetection with { Background = "joined-bubble", Regions = new[] {
+                    narrowDetection.Regions[0] with { Translation = "ฉันจะใช้ความสามารถทั้งหมดที่มี" } } };
+                var joinedPixels = Pixels(BuildFrame(narrowDetection));
+                Paint(joinedPixels, fixture.Width, fixture.Height, narrowDetection.Regions[0].Bounds.Drawing,
+                    (_, _) => ((byte)248, (byte)248, (byte)248));
+                foreach (int inkTop in new[] { 160, 232 })
+                    Paint(joinedPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(292, inkTop, 4, 12),
+                        (_, _) => ((byte)18, (byte)18, (byte)18));
+                Paint(joinedPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(220, 196, 65, 16),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                Paint(joinedPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(307, 196, 68, 16),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                var joinedFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, joinedPixels, fixture.Width * 4);
+                joinedFrame.Freeze();
+                var joinedResult = Replay(joined, joinedFrame);
+                Verify(joined, joinedResult);
+                var shortJoined = joined with { Regions = new[] {
+                    joined.Regions[0] with { Translation = "ไป มา" } } };
+                var shortJoinedResult = Replay(shortJoined, joinedFrame);
+                Verify(shortJoined, shortJoinedResult);
+                Require(shortJoinedResult.Items.Single(item => item.Kind == "caption").FontSize >= 28,
+                    "A short joined caption must use both roomy lobes even when its neck needs more rows than there are words.");
+                var joinedRendered = Pixels(joinedResult.Rendered);
+                var shortJoinedRendered = Pixels(shortJoinedResult.Rendered);
+                for (int y = 0; y < fixture.Height; y++)
+                for (int x = 0; x < fixture.Width; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94
+                        || y >= 196 && y < 212 && (x < 285 || x >= 307))
+                    {
+                        int pixel = (y * fixture.Width + x) * 4;
+                        Require(joinedPixels.AsSpan(pixel, 4).SequenceEqual(joinedRendered.AsSpan(pixel, 4))
+                            && joinedPixels.AsSpan(pixel, 4).SequenceEqual(shortJoinedRendered.AsSpan(pixel, 4)),
+                            "Joined bubble fitting must preserve its narrow neck and exterior artwork.");
+                    }
+                Require(first.Items.Single(item => item.Kind == "caption").Lines.All(line => !string.IsNullOrWhiteSpace(line)),
+                    "An ordinary oval must not acquire spare blank caption rows.");
+                var offsetBubble = fixture with { Background = "offset-bubble", Regions = new[] {
+                    fixture.Regions[0] with { Bounds = new Box(277, 132, 50, 122) } },
+                    TextContainers = new[] { new ContainerFixture("dialogue", new Box(220, 105, 155, 205), true) } };
+                var offsetPixels = Pixels(BuildFrame(offsetBubble));
+                bool InsideOffsetBubble(int x, int y) =>
+                    Math.Pow((x - 326d) / 34, 2) + Math.Pow((y - 152d) / 45, 2) <= 1
+                    || Math.Pow((x - 285d) / 58, 2) + Math.Pow((y - 240d) / 62, 2) <= 1;
+                Paint(offsetPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(220, 105, 155, 205),
+                    (x, y) => {
+                        if (!InsideOffsetBubble(x, y)) return ((byte)90, (byte)120, (byte)150);
+                        for (int dy = -2; dy <= 2; dy++)
+                        for (int dx = -2; dx <= 2; dx++)
+                            if (!InsideOffsetBubble(x + dx, y + dy)) return ((byte)18, (byte)18, (byte)18);
+                        return ((byte)248, (byte)248, (byte)248);
+                    });
+                foreach (var ink in new[] { new Drawing.Rectangle(320, 136, 4, 12),
+                    new Drawing.Rectangle(277, 232, 4, 12) })
+                    Paint(offsetPixels, fixture.Width, fixture.Height, ink,
+                        (_, _) => ((byte)18, (byte)18, (byte)18));
+                var offsetFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, offsetPixels, fixture.Width * 4);
+                offsetFrame.Freeze();
+                var offsetResult = Replay(offsetBubble, offsetFrame);
+                Verify(offsetBubble, offsetResult);
+                var offsetRendered = Pixels(offsetResult.Rendered);
+                Require(offsetRendered[(140 * fixture.Width + 321) * 4] == 248,
+                    "Offset joined bubbles must cover the upper lobe's source ink even when the OCR corners lie outside.");
+                for (int y = 105; y < 310; y++)
+                for (int x = 220; x < 375; x++)
+                    if (!InsideOffsetBubble(x, y) || offsetPixels[(y * fixture.Width + x) * 4] == 18
+                        && !new Drawing.Rectangle(320, 136, 4, 12).Contains(x, y)
+                        && !new Drawing.Rectangle(277, 232, 4, 12).Contains(x, y))
+                        for (int channel = 0; channel < 4; channel++)
+                            Require(Math.Abs(offsetPixels[(y * fixture.Width + x) * 4 + channel]
+                                - offsetRendered[(y * fixture.Width + x) * 4 + channel]) <= 1,
+                                "Offset joined bubble outlines and exterior artwork must remain unchanged within one compositor rounding level.");
                 var inkAtSeed = Pixels(frame);
                 Paint(inkAtSeed, fixture.Width, fixture.Height, new Drawing.Rectangle(255, 197, 4, 12),
                     (_, _) => ((byte)18, (byte)18, (byte)18));
@@ -116,6 +252,15 @@ internal static class Program
                 Require(Math.Abs(dialogue.Bounds.X + dialogue.Bounds.Width / 2d - 297.5) <= 4
                     && Math.Abs(dialogue.Bounds.Y + dialogue.Bounds.Height / 2d - 202.5) <= 4,
                     "Bubble captions must center in the bubble interior even when detection is off-center.");
+                var wideBubble = fixture with { Regions = new[] {
+                        fixture.Regions[0] with { Bounds = new Box(310, 155, 45, 130) } },
+                    TextContainers = new[] { fixture.TextContainers[0] with { Bounds = new Box(190, 115, 200, 220) } } };
+                var wideFrame = BuildFrame(wideBubble);
+                wideBubble = wideBubble with { Background = "wide-bubble" };
+                var wideResult = Replay(wideBubble, wideFrame);
+                Verify(wideBubble, wideResult);
+                Require(Pixels(wideResult.Rendered)[(128 * fixture.Width + 293) * 4] == 248,
+                    "A tall narrow detection must find the full wider bubble and cover its original lettering.");
                 var darkPixels = Pixels(inkFrame);
                 for (int pixelOffset = 0; pixelOffset < darkPixels.Length; pixelOffset += 4)
                 {
@@ -235,7 +380,8 @@ internal static class Program
         }, _jsonOptions));
     }
 
-    private static ReplayResult Replay(ReplayCase fixture, BitmapSource frame, bool performance = false, bool allowMissing = false)
+    private static ReplayResult Replay(ReplayCase fixture, BitmapSource frame, bool performance = false,
+        bool allowMissing = false, bool allowLayoutRejection = false)
     {
         var screen = Forms.Screen.PrimaryScreen?.Bounds ?? throw new InvalidOperationException("No primary display is available.");
         Require(fixture.Width <= screen.Width && fixture.Height <= screen.Height,
@@ -250,9 +396,18 @@ internal static class Program
             var captionStyle = fixture.AutoStyle || fixture.Background == "colored-ink"
                 ? CaptionStyles.ResolveInstalled(new CaptionStyleOptions(CaptionRole.Auto)) : null;
             var firstRender = Stopwatch.StartNew();
-            overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
-                SubtitleStyle.Overwrite, 6, frame, japaneseToThai, allowMissingTranslations: allowMissing,
-                captionStyle: captionStyle);
+            try
+            {
+                overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
+                    SubtitleStyle.Overwrite, 6, frame, japaneseToThai, allowMissingTranslations: allowMissing,
+                    captionStyle: captionStyle);
+            }
+            catch (SubtitleLayoutException) when (allowLayoutRejection)
+            {
+                // These two protection cases have no safe margin; rejection must leave the source untouched.
+                Require(((Canvas)overlay.Content).Children.Count == 0,
+                    "Rejected artwork or pending-ink placement must not leave a partial caption layer.");
+            }
             overlay.UpdateLayout();
             firstRender.Stop();
             if (performance)
@@ -315,6 +470,23 @@ internal static class Program
                         + string.Join(",", covered.Skip((point.Y * fixture.Width + point.X) * 4).Take(4)));
             }
             var rendered = RenderCapturedView(frame, visuals, items, fixture.Width, fixture.Height);
+            if (fixture.Background == "bubble" && !allowMissing)
+            {
+                var obstructed = BuildFrame(fixture with { Background = "dense-margins" });
+                var translations = fixture.Regions.Select(region => region.Translation).ToArray();
+                overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 6, obstructed,
+                    japaneseToThai, captionStyle: captionStyle);
+                overlay.UpdateLayout();
+                Require(canvas.Children.OfType<Border>().Any(border => border.Uid == "association-badge"),
+                    "Text over artwork must first use a readable margin in the changed-view check.");
+                overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 6, frame,
+                    japaneseToThai, captionStyle: captionStyle);
+                overlay.UpdateLayout();
+                var restored = canvas.Children.OfType<Border>()
+                    .Select(border => SceneItem.From(border, fixture, capture, desktop, transform)).ToArray();
+                Require(JsonSerializer.Serialize(restored) == JsonSerializer.Serialize(items),
+                    "A changed captured view with available bubble space must restore complete captions inside the bubble.");
+            }
             if (fixture.LocalHeadings is { Length: > 0 })
             {
                 var custom = CaptionStyles.ResolveInstalled(new CaptionStyleOptions(CaptionRole.Auto,
