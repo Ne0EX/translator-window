@@ -2,6 +2,22 @@
   "schemaVersion": 1,
   "cases": [
     {
+      "id": "navigation-gutters", "defectClass": "page-arrow-margin",
+      "width": 1000, "height": 701, "dpi": 96, "zoom": 1,
+      "sourceLanguage": "ja", "targetLanguage": "th", "background": "navigation-gutters",
+      "expectMarginCaption": true,
+      "regions": [
+        {"id":"a","bounds":[440,150,30,40],"recognizedText":"台詞","translation":"ข้อความภาษาไทยที่ต้องอ่านได้ครบทุกคำ โดยไม่ทับภาพหรือปุ่มเปลี่ยนหน้า"},
+        {"id":"b","bounds":[530,330,30,40],"recognizedText":"台詞","translation":"ข้อความอีกส่วนหนึ่งที่ต้องอ่านได้อย่างชัดเจน"}
+      ],
+      "textContainers": [],
+      "protectedArtwork": [
+        {"id":"left-arrow","bounds":[24,330,44,44]},
+        {"id":"right-arrow","bounds":[932,330,44,44]}
+      ],
+      "intendedPassages": []
+    },
+    {
       "id": "display-heading-treatment",
       "defectClass": "source-style",
       "width": 1000, "height": 600, "dpi": 96, "zoom": 1.0,

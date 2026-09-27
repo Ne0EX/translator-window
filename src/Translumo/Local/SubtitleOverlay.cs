@@ -289,6 +289,25 @@ public sealed class SubtitleOverlay : Window
         if (frame is not null && (frame.PixelWidth != captureBounds.Width || frame.PixelHeight != captureBounds.Height))
             throw new ArgumentException("The captured page must match the captured pixel dimensions.", nameof(frame));
         if (regions.Count == 0) { Clear(); return; }
+        if (frame?.IsFrozen == true && layoutFrame?.IsFrozen == true && layoutPixels is not null
+            && !ReferenceEquals(layoutFrame, frame) && frame.PixelWidth == layoutFrame.PixelWidth
+            && frame.PixelHeight == layoutFrame.PixelHeight)
+        {
+            var comparison = ArrayPool<byte>.Shared.Rent(layoutPixels.Length);
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var converted = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+                converted.CopyPixels(comparison, frame.PixelWidth * 4, 0);
+                if (layoutPixels.AsSpan().SequenceEqual(comparison.AsSpan(0, layoutPixels.Length)))
+                {
+                    if (ReferenceEquals(maskFrame, layoutFrame)) maskFrame = frame;
+                    if (ReferenceEquals(captionFrame, layoutFrame)) captionFrame = frame;
+                    layoutFrame = frame;
+                }
+            }
+            finally { ArrayPool<byte>.Shared.Return(comparison); }
+        }
         if (frame is null || !ReferenceEquals(layoutFrame, frame))
         {
             layoutFrame = frame;
@@ -403,6 +422,8 @@ public sealed class SubtitleOverlay : Window
             var source = sources[i];
             var cover = masks[i];
             var permittedLocalArea = PermittedCaptionArea(source, captureBounds);
+            var placementArea = sourceCovers[i] is { Plan: { Classification: SourceCoverClass.Plain } } interior
+                && interior.Bounds.Contains(source) ? interior.Bounds : source;
             var appearance = CaptionAppearance(CaptionStyles.ForRegion(captionStyle, regions[i]),
                 sourceCovers[i]?.Background,
                 captionStyle.Role == CaptionRole.Auto && captionStyle.Foreground == Colors.Black
@@ -547,7 +568,7 @@ public sealed class SubtitleOverlay : Window
                         Math.Max(72, source.Height * (style == SubtitleStyle.Overlay ? 2.4 : 1.8)));
                     if (height > maxHeight || height > width * 1.6) continue;
                     Brush? candidateBackground = backgroundPixels is null ? Brushes.White : null;
-                    var candidatePosition = SubtitleLayout.Place(source, new Drawing.Size(width, height), captureBounds,
+                    var candidatePosition = SubtitleLayout.Place(placementArea, new Drawing.Size(width, height), captureBounds,
                         blockers, style == SubtitleStyle.Overlay, 6, frame is null ? null
                             : candidate => {
                                 workBudget.CheckPlacement();
@@ -568,9 +589,9 @@ public sealed class SubtitleOverlay : Window
                     double sourceRatio = (double)source.Width / Math.Max(1, source.Height);
                     double candidateRatio = (double)width / Math.Max(1, height);
                     double centerX = candidatePosition.Value.Left + candidatePosition.Value.Width / 2d
-                        - (source.Left + source.Width / 2d);
+                        - (placementArea.Left + placementArea.Width / 2d);
                     double centerY = candidatePosition.Value.Top + candidatePosition.Value.Height / 2d
-                        - (source.Top + source.Height / 2d);
+                        - (placementArea.Top + placementArea.Height / 2d);
                     double score = centerX * centerX + centerY * centerY
                         + Math.Abs(candidateRatio - sourceRatio) * 100;
                     if (score >= bestScore) continue;
@@ -753,22 +774,21 @@ public sealed class SubtitleOverlay : Window
             .Select((sourceIndex, rank) => (sourceIndex, number: rank + 1))
             .ToDictionary(pair => pair.sourceIndex, pair => pair.number);
         foreach (double fontSize in new[] { 18d, 16d, 14d, 12d })
-        foreach (int firstColumnCount in margins.Length == 1
-                     ? new[] { readingOrder.Length }
-                     : new[] { readingOrder.Length, 0, (readingOrder.Length + 1) / 2 }.Distinct())
+        // ponytail: fill columns by measured height; arbitrary obstacle packing needs a richer layout.
+        foreach (int firstColumn in Enumerable.Range(0, margins.Length))
         {
             cancellationToken.ThrowIfCancellationRequested();
             placed.Clear();
             int[] tops = margins.Select(margin => visuals
-                .Where(visual => visual.Border.Child is TextBlock && margin.Contains(visual.Bounds))
+                .Where(visual => visual.Border.Child is TextBlock && margin.IntersectsWith(visual.Bounds))
                 .Select(visual => visual.Bounds.Bottom + 1).DefaultIfEmpty(margin.Top).Max()).ToArray();
             bool fits = true;
+            int column = firstColumn;
             for (int orderIndex = 0; orderIndex < readingOrder.Length; orderIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int i = readingOrder[orderIndex];
                 var appearance = CaptionAppearance(CaptionStyles.ForRegion(captionStyle, regions[i]));
-                int column = orderIndex < firstColumnCount ? 0 : 1;
                 var margin = margins[column];
                 string translation = $"{numbers[i]}. {SafeThaiTranslation(translations[i])}";
                 var text = new TextBlock {
@@ -790,7 +810,12 @@ public sealed class SubtitleOverlay : Window
                 text.Text = wrapped;
                 text.Measure(new Size(contentWidth, double.PositiveInfinity));
                 int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
-                if (tops[column] + height > margin.Bottom) { fits = false; break; }
+                if (tops[column] + height > margin.Bottom)
+                {
+                    if (++column < margins.Length) { orderIndex--; continue; }
+                    fits = false;
+                    break;
+                }
                 var bounds = new Drawing.Rectangle(margin.Left, tops[column], margin.Width, height);
                 if (visuals.Any(visual => visual.Border.Child is TextBlock
                     && visual.Bounds.IntersectsWith(bounds))) { fits = false; break; }

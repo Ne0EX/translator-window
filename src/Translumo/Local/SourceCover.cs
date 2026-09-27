@@ -83,9 +83,31 @@ public static class SourceCover
         if (!IsWithinBudget(search) || !search.Contains(text)) return null;
         // ponytail: bounded flat, closed bubbles only; open borders and textured fills keep the footprint fallback.
         int stride = width * 4;
-        int seedX = Math.Max(search.Left, text.Left - 3), seedY = text.Top + text.Height / 2;
-        int seedOffset = seedY * stride + seedX * 4;
-        var fill = new Pixel(pixels[seedOffset], pixels[seedOffset + 1], pixels[seedOffset + 2]);
+        // Sample around the text: one fixed seed can land on a glyph or furigana.
+        var samples = new (int X, int Y, Pixel Color)[12];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            int fraction = i % 3 + 1;
+            int x = (i / 3) switch { 0 => text.Left - 3, 1 => text.Right + 2,
+                _ => text.Left + text.Width * fraction / 4 };
+            int y = (i / 3) switch { 2 => text.Top - 3, 3 => text.Bottom + 2,
+                _ => text.Top + text.Height * fraction / 4 };
+            x = Math.Clamp(x, search.Left, search.Right - 1);
+            y = Math.Clamp(y, search.Top, search.Bottom - 1);
+            int offset = y * stride + x * 4;
+            samples[i] = (x, y, new Pixel(pixels[offset], pixels[offset + 1], pixels[offset + 2]));
+        }
+        int selected = 0, support = 0;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            int matches = 0;
+            foreach (var sample in samples)
+                if (Math.Abs(sample.Color.B - samples[i].Color.B) <= 16
+                    && Math.Abs(sample.Color.G - samples[i].Color.G) <= 16
+                    && Math.Abs(sample.Color.R - samples[i].Color.R) <= 16) matches++;
+            if (matches > support) { support = matches; selected = i; }
+        }
+        var (seedX, seedY, fill) = samples[selected];
         int count = search.Width * search.Height;
         var inside = new bool[count];
         var pending = new int[count];

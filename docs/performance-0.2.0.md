@@ -201,3 +201,77 @@ Build succeeds with the existing high-DPI warning and NU1900 (the NuGet
 vulnerability service is unavailable). Private source images remain local.
 See [visual limits](feedback/2026-09-27-style-target.md) before interpreting
 passing text/coverage samples as reference-quality reconstruction.
+
+## Bubble and three-reader stress slice — 2026-09-27
+
+The reader accepted the narrow typography treatment and deferred broader styling.
+Checkpoint `06c140b` was committed and pushed before this slice. Release and
+seamless-reading acceptance remain pending.
+
+Changes at the approved public renderer boundary:
+
+- Sample twelve positions around detected text to avoid starting the closed-bubble
+  fill on a glyph. Existing bounded flood, outline and pending-passage guards remain.
+- Center eligible captions on the qualified plain container rather than an
+  off-center detection. Light/dark bubble, exterior artwork and pending-text checks pass.
+- Reuse layout/cover caches when separately captured frozen frames have identical
+  pixels. Changed frames still invalidate the caches.
+- Fill margin columns by measured height instead of splitting caption counts.
+  Avoid page arrows with two extra bounded gutter insets, and account for existing
+  captions that intersect a margin without being fully contained in it.
+
+### Evidence
+
+Synthetic public-renderer regressions first reproduced glyph-seed coverage and
+off-center placement failures. The two newly captured dense reader views then
+failed with `SubtitleLayoutException` at the margin fallback. Both now render a
+complete scene without that exception. A redistribution-safe navigation-arrow
+fixture joins the suite; all 13 fixtures pass deterministic pixels, text/geometry,
+and the unchanged 16.67 ms repeated-view median gate. Latest slowest median:
+1.14 ms; worst individual sample: 4.57 ms.
+
+The previous Senmanga eight-region fixed replay measured 32.92 ms median / 38.59 ms
+worst with the checkpoint DLL, then 1.64 / 4.91 ms with identical-frame reuse.
+New fixed captures measured 3.46 / 6.91 ms for Tameshiyo and 2.98 / 6.24 ms for
+Comic Days. These are nine repeated-view renderer samples, not cold layout,
+translation latency, browser FPS or a guarantee against caption flicker.
+
+Live Comet checks used the three supplied URLs, then saved 1524×810 source captures:
+
+| Reader | Exercise and observed outcome |
+| --- | --- |
+| Senmanga | Two large upward scrolls from the color section into dialogue. Fresh status: 11 blocks, capture 19 ms, processing 1,010 ms, cached layout 0 ms. Separate captured-view full processing passes with 10/10 recognized regions rendered. |
+| Comic Days | Two forward spread turns. Fresh status: 11 blocks, capture 17 ms, processing 313 ms, cached layout 0 ms. Captured replay exposed arrow-obstructed margins and partial caption/margin overlap; corrected. |
+| Tameshiyo | Cover navigation, interior jump, forward/back reversal, ending on reader counter 6/27 (printed page 235). A space failure was observed; a later live result showed 23 blocks, capture 21 ms, processing 356 ms, layout 808 ms. Captured replay reproduced the column-split failure; corrected. |
+
+The full-processing reruns for Comic Days and Tameshiyo still fail strict text
+verification, rather than placement. Comic Days includes Japanese punctuation or
+untranslated output that the existing Thai safety filter changes; Tameshiyo's first
+flag is recognized browser bookmark text. Diagnostics retain the original model
+output and rendered result. No failure was relabeled as a successful translation.
+Whole-window capture also recognizes browser controls; Comic Days' browser
+translation popup was present. These are not clean manga-only accuracy samples.
+
+Private captures/manifests, fixed translations and composites are under
+`.cache/replay/three-readers/`; checkpoint comparison is under
+`.cache/benchmarks/bubble-baseline/`. Images remain local. The replay composites
+were visually inspected: dense views still rely heavily on margin captions,
+some source text remains, and small badges can clip. This is not the seamless
+in-bubble target yet.
+
+Live Stop returned `Translation stopped`. The layout/session lifecycle check
+passes after adding its missing existing `DisplayLettering.cs` compile input.
+Release publish succeeds with the existing NU1900 advisory-feed warning.
+Native screenshots exclude the caption layer, and sparse UI snapshots cannot
+establish animation smoothness; final live visual acceptance remains open.
+
+### Tradeoffs and next acceptance work
+
+Exact frame reuse adds one pooled pixel copy/comparison when a new frame arrives;
+changed-view overhead has not been isolated. The gutter search has two extra
+bounded insets when earlier candidates fail. Neither change adds model work or
+VRAM allocation. Greedy column filling still cannot solve arbitrary obstacles.
+The existing 12-DIP minimum was retained; dense-view margin text is still smaller
+than desired. Prioritize more local bubble placement, complete source coverage,
+badge readability and cold-layout cost before release. Preserve current translation
+speed and obtain matched live scrolling/page-turn evidence for the final build.

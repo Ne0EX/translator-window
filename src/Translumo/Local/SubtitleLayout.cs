@@ -13,8 +13,8 @@ internal static class SubtitleLayout
     {
         if (pixels.Length != (long)capture.Width * capture.Height * 4) return null;
         int widest = Math.Min(360, capture.Width / 3);
-        // ponytail: bounded edge insets cover narrow window borders/scrollbars; wider chrome needs content bounds.
-        foreach (int inset in new[] { 0, 16, 32 })
+        // ponytail: bounded insets avoid borders and page arrows; wider chrome needs content bounds.
+        foreach (int inset in new[] { 0, 16, 32, 64, 96 })
         for (int width = widest / 20 * 20; width >= 120; width -= 20)
         {
             cancellationToken.ThrowIfCancellationRequested();

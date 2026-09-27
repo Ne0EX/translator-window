@@ -70,7 +70,8 @@ internal static class Program
             else frame = BuildFrame(fixture);
             var first = Replay(fixture, frame, performance);
             var second = Replay(fixture, frame);
-            Require(JsonSerializer.Serialize(first.Items) == JsonSerializer.Serialize(second.Items),
+            Require(JsonSerializer.Serialize(first.Items.OrderBy(item => item.Kind).ThenBy(item => item.RegionId))
+                == JsonSerializer.Serialize(second.Items.OrderBy(item => item.Kind).ThenBy(item => item.RegionId)),
                 $"{fixture.Id}: repeated geometry, lines, font or color differed.");
             Require(first.RenderHash == second.RenderHash,
                 $"{fixture.Id}: repeated renderer pixels differed.");
@@ -91,6 +92,36 @@ internal static class Program
             }
             if (fixture.Background == "bubble")
             {
+                var inkAtSeed = Pixels(frame);
+                Paint(inkAtSeed, fixture.Width, fixture.Height, new Drawing.Rectangle(255, 197, 4, 12),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                var inkFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, inkAtSeed, fixture.Width * 4);
+                inkFrame.Freeze();
+                Verify(fixture, Replay(fixture, inkFrame));
+                var offCenter = fixture with { Regions = new[] {
+                    fixture.Regions[0] with { Bounds = new Box(300, 155, 40, 92) } } };
+                var centered = Replay(offCenter, frame);
+                var dialogue = centered.Items.Single(item => item.Kind == "caption");
+                Require(Math.Abs(dialogue.Bounds.X + dialogue.Bounds.Width / 2d - 297.5) <= 4
+                    && Math.Abs(dialogue.Bounds.Y + dialogue.Bounds.Height / 2d - 202.5) <= 4,
+                    "Bubble captions must center in the bubble interior even when detection is off-center.");
+                var darkPixels = Pixels(inkFrame);
+                for (int pixelOffset = 0; pixelOffset < darkPixels.Length; pixelOffset += 4)
+                {
+                    if (darkPixels[pixelOffset] != darkPixels[pixelOffset + 1]
+                        || darkPixels[pixelOffset] != darkPixels[pixelOffset + 2]) continue;
+                    byte shade = darkPixels[pixelOffset] == 248 ? (byte)24
+                        : darkPixels[pixelOffset] == 18 ? (byte)235 : darkPixels[pixelOffset];
+                    darkPixels[pixelOffset] = darkPixels[pixelOffset + 1] = darkPixels[pixelOffset + 2] = shade;
+                }
+                var darkFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, darkPixels, fixture.Width * 4);
+                darkFrame.Freeze();
+                var darkBubble = Replay(fixture with { SourceInkPoints = null }, darkFrame);
+                Require(Pixels(darkBubble.Rendered)[(128 * fixture.Width + 293) * 4] == 24
+                    && darkBubble.Items.Single(item => item.Kind == "caption").Foreground == "#FFFFFFFF",
+                    "Bubble sampling must retain dark paper and contrasting light captions when a seed hits ink.");
                 var progressive = fixture with { Regions = fixture.Regions.Concat(new[] {
                     new RegionFixture("pending", new Box(291, 123, 4, 12), "pending", "") }).ToArray() };
                 var pending = Replay(progressive, frame, allowMissing: true);
@@ -433,6 +464,9 @@ internal static class Program
                 "dark" => ((byte)24, (byte)24, (byte)24),
                 "colored" => ((byte)176, (byte)32, (byte)81),
                 "gradient" => ((byte)(68 + 18 * x / fixture.Width), (byte)(98 + 18 * x / fixture.Width), (byte)(170 + 18 * x / fixture.Width)),
+                "navigation-gutters" when x < 300 || x >= fixture.Width - 300 => ((byte)120, (byte)120, (byte)120),
+                "navigation-gutters" => (x / 12 + y / 12) % 2 == 0
+                    ? ((byte)30, (byte)30, (byte)30) : ((byte)225, (byte)225, (byte)225),
                 "dense-margins-window-border" when x < 8 || x >= fixture.Width - 16 => ((byte)24, (byte)24, (byte)24),
                 "dense-margins" or "dense-margins-window-border" when x < 170 || x >= fixture.Width - 170 => ((byte)120, (byte)120, (byte)120),
                 "dense-margins" or "dense-margins-window-border" when (x / 12 + y / 12) % 2 == 0 => ((byte)30, (byte)30, (byte)30),
