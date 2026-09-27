@@ -64,16 +64,60 @@ class Detector:
             self.session = ort.InferenceSession(self.model_path, self.options, providers=["CPUExecutionProvider"])
             predictions = self.session.run(["blk"], {self.input_name: blob})[0][0]
         accepted = select_text_boxes(predictions)
+        normal_count = len(accepted)
+        # Weak detector proposals need independent lettering evidence; do not lower the general cutoff.
+        confidence = predictions[:, 4] * predictions[:, 5:].max(axis=1)
+        weak = predictions[(confidence > .2) & (confidence <= .4), :4].copy()
+        weak[:, :2] -= weak[:, 2:] / 2
+        for candidate in weak:
+            x, y, bw, bh = candidate
+            if bw < 3 * bh or bh < 4 or any(overlap(candidate, other)
+                    > .5 * min(bw * bh, other[2] * other[3]) for other in accepted):
+                continue
+            left, top = max(0, int(x * width / scaled_width)), max(0, int(y * height / scaled_height))
+            right = min(width, int((x + bw) * width / scaled_width))
+            bottom = min(height, int((y + bh) * height / scaled_height))
+            if is_display_band(image[top:bottom, left:right]):
+                accepted.append(candidate)
         regions = []
-        for x, y, box_width, box_height in accepted:
+        for index, (x, y, box_width, box_height) in enumerate(accepted):
             left = max(0, int(np.floor(x * width / scaled_width)))
             top = max(0, int(np.floor(y * height / scaled_height)))
             right = min(width, int(np.ceil((x + box_width) * width / scaled_width)))
             bottom = min(height, int(np.ceil((y + box_height) * height / scaled_height)))
             if right > left and bottom > top:
+                if index >= normal_count and is_display_band(image[top:bottom, left:right]):
+                    # Weak proposals can omit the white trailing characters of a bright heading.
+                    pad = bottom - top
+                    start, stop = max(0, left - pad * 2), min(width, right + pad * 2)
+                    b, g, r = cv2.split(image[top:bottom, start:stop].astype(np.int16))
+                    red = (r > 180) & (g < 205) & (b < 230) & (r > g + 35) & (r > b + 20)
+                    columns = np.uint8(red.sum(axis=0) >= pad * .08)[None]
+                    columns = cv2.morphologyEx(columns, cv2.MORPH_CLOSE,
+                        np.ones((1, max(3, pad // 8)), np.uint8))[0]
+                    mid = (left + right) // 2 - start
+                    if columns[mid]:
+                        first = last = mid
+                        while first > 0 and columns[first - 1]: first -= 1
+                        while last + 1 < len(columns) and columns[last + 1]: last += 1
+                        left, right = min(left, start + first), max(right, start + last + 1)
+                        right = min(width, right + max(2, pad // 8))
+                        top, bottom = max(0, top - pad // 10), min(height, bottom + pad // 10)
                 regions.append({"x": left, "y": top, "width": right - left, "height": bottom - top,
                                 "vertical": bool(box_height > box_width * 0.8)})
         return regions
+
+
+def is_display_band(crop):
+    """Qualify bright display lettering on a continuous red band."""
+    height, width = crop.shape[:2]
+    if height < 16 or width < max(120, height * 3) or width * height > 250_000:
+        return False
+    b, g, r = cv2.split(crop.astype(np.int16))
+    red = (r > 180) & (g < 130) & (b < 180) & (r > g + 90) & (r > b + 55)
+    yellow = (r > 210) & (g > 175) & (b < 140)
+    return (red.mean() >= .18 and (red.sum(axis=0) >= height * .08).mean() >= .7
+            and yellow.mean() >= .025)
 
 
 def create_session(runtime, model, options, device):

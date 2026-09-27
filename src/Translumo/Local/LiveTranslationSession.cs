@@ -355,7 +355,8 @@ public sealed class LiveTranslationSession
                                     string processing = progressiveManga
                                         ? $"processing {result.OcrMs + result.TranslationMs:N0} ms"
                                         : $"OCR {result.OcrMs:N0} ms · translation {result.TranslationMs:N0} ms";
-                                    _status($"{result.Regions.Count - result.UnreadableCount} translated blocks · local model · capture {result.CaptureMs:N0} ms · {processing} · layout {layoutTimer.ElapsedMilliseconds:N0} ms{unreadable}");
+                                    var headingStatus = captionProfile.Role == CaptionRole.Auto ? $", {_overlay.StyledHeadingCount} styled headings" : "";
+                                    _status($"{result.Regions.Count - result.UnreadableCount} translated blocks{headingStatus} · local model · capture {result.CaptureMs:N0} ms · {processing} · layout {layoutTimer.ElapsedMilliseconds:N0} ms{unreadable}");
                                 }
                                 catch (SubtitleLayoutException error) when (error.BackgroundRejected
                                     && style == SubtitleStyle.Overwrite && hideOriginals)

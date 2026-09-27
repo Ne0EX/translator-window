@@ -29,6 +29,9 @@ public sealed class SourceCoverPlan
     public Rectangle FootprintBounds { get; }
     public int CoveredPixelCount { get; }
 
+    internal bool Covers(int x, int y) => PermittedArea.Contains(x, y)
+        && mask[(y - PermittedArea.Top) * PermittedArea.Width + x - PermittedArea.Left];
+
     public byte[] CreatePatch(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -73,6 +76,93 @@ public static class SourceCover
     internal static bool IsWithinBudget(Rectangle area)
         => area.Width > 0 && area.Height > 0
             && (long)area.Width * area.Height <= MaxPermittedPixels;
+
+    internal static SourceCoverPlan? TryCreateBubble(byte[] pixels, int width, int height,
+        Rectangle text, Rectangle search, CancellationToken cancellationToken)
+    {
+        if (!IsWithinBudget(search) || !search.Contains(text)) return null;
+        // ponytail: bounded flat, closed bubbles only; open borders and textured fills keep the footprint fallback.
+        int stride = width * 4;
+        int seedX = Math.Max(search.Left, text.Left - 3), seedY = text.Top + text.Height / 2;
+        int seedOffset = seedY * stride + seedX * 4;
+        var fill = new Pixel(pixels[seedOffset], pixels[seedOffset + 1], pixels[seedOffset + 2]);
+        int count = search.Width * search.Height;
+        var inside = new bool[count];
+        var pending = new int[count];
+        int head = 0, tail = 0;
+        int seed = (seedY - search.Top) * search.Width + seedX - search.Left;
+        inside[seed] = true;
+        pending[tail++] = seed;
+        int minX = seedX, maxX = seedX, minY = seedY, maxY = seedY;
+        while (head < tail)
+        {
+            if ((head & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
+            int index = pending[head++];
+            int x = index % search.Width + search.Left, y = index / search.Width + search.Top;
+            if (x == search.Left || x == search.Right - 1 || y == search.Top || y == search.Bottom - 1)
+                return null;
+            minX = Math.Min(minX, x); maxX = Math.Max(maxX, x);
+            minY = Math.Min(minY, y); maxY = Math.Max(maxY, y);
+            Visit(index - 1, x - 1, y); Visit(index + 1, x + 1, y);
+            Visit(index - search.Width, x, y - 1); Visit(index + search.Width, x, y + 1);
+        }
+        var bounds = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
+        if (!bounds.Contains(text) || tail < text.Width * text.Height / 2
+            || (long)bounds.Width * bounds.Height > (long)text.Width * text.Height * 8) return null;
+
+        // Flood the complement from outside: disconnected holes are lettering, the connected outline is preserved.
+        var exterior = new bool[count];
+        head = tail = 0;
+        exterior[0] = true;
+        pending[tail++] = 0;
+        while (head < tail)
+        {
+            if ((head & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
+            int index = pending[head++], x = index % search.Width, y = index / search.Width;
+            if (x > 0) Outside(index - 1);
+            if (x + 1 < search.Width) Outside(index + 1);
+            if (y > 0) Outside(index - search.Width);
+            if (y + 1 < search.Height) Outside(index + search.Width);
+        }
+        int covered = 0, ink = 0;
+        var holes = new bool[count];
+        for (int index = 0; index < count; index++)
+        {
+            holes[index] = !exterior[index] && !inside[index];
+            if (holes[index]) ink++;
+            inside[index] = !exterior[index];
+            if (inside[index]) covered++;
+        }
+        if (ink < 4 || ink > covered * 0.35
+            || HasLargeNonTextComponent(holes, search, bounds, ink, cancellationToken)) return null;
+        for (int y = text.Top; y < text.Bottom; y++)
+        for (int x = text.Left; x < text.Right; x++)
+            if (!inside[(y - search.Top) * search.Width + x - search.Left]) return null;
+        var reconstruction = new byte[count * 4];
+        for (int i = 0; i < count; i++)
+        {
+            reconstruction[i * 4] = fill.B; reconstruction[i * 4 + 1] = fill.G;
+            reconstruction[i * 4 + 2] = fill.R; reconstruction[i * 4 + 3] = 255;
+        }
+        return new SourceCoverPlan(SourceCoverClass.Plain, new Rectangle(0, 0, width, height),
+            search, bounds, inside, reconstruction, covered);
+
+        void Visit(int index, int x, int y)
+        {
+            if (inside[index]) return;
+            int offset = y * stride + x * 4;
+            if (Math.Abs(pixels[offset] - fill.B) > 16 || Math.Abs(pixels[offset + 1] - fill.G) > 16
+                || Math.Abs(pixels[offset + 2] - fill.R) > 16) return;
+            inside[index] = true;
+            pending[tail++] = index;
+        }
+        void Outside(int index)
+        {
+            if (inside[index] || exterior[index]) return;
+            exterior[index] = true;
+            pending[tail++] = index;
+        }
+    }
 
     public static SourceCoverPlan? TryCreate(byte[] sourceBgra32, int width, int height, int stride,
         Rectangle textRegion, Rectangle permittedArea, CancellationToken cancellationToken = default)

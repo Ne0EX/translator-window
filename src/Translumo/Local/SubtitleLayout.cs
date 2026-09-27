@@ -9,18 +9,20 @@ namespace Translumo.Local;
 internal static class SubtitleLayout
 {
     internal static Rectangle? FindPlainMargin(Rectangle capture, IReadOnlyList<Rectangle> masks, byte[] pixels,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Func<Rectangle, bool>? accepts = null)
     {
         if (pixels.Length != (long)capture.Width * capture.Height * 4) return null;
         int widest = Math.Min(360, capture.Width / 3);
+        // ponytail: bounded edge insets cover narrow window borders/scrollbars; wider chrome needs content bounds.
+        foreach (int inset in new[] { 0, 16, 32 })
         for (int width = widest / 20 * 20; width >= 120; width -= 20)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Rectangle? best = null;
-            foreach (int left in new[] { capture.Right - width, capture.Left })
+            foreach (int left in new[] { capture.Right - width - inset, capture.Left + inset })
             {
                 int runTop = -1;
-                for (int y = capture.Top; y <= capture.Bottom; y += 4)
+                for (int y = capture.Top; ; y = Math.Min(y + 4, capture.Bottom))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var row = new Rectangle(left, y, width, Math.Min(4, capture.Bottom - y));
@@ -28,7 +30,7 @@ internal static class SubtitleLayout
                     int minR = 255, minG = 255, minB = 255, maxR = 0, maxG = 0, maxB = 0;
                     if (plain)
                     {
-                        int sampleY = y + row.Height / 2;
+                        for (int sampleY = y; sampleY < y + row.Height; sampleY++)
                         for (int x = left; x < left + width; x += Math.Max(1, width / 16))
                         {
                             int offset = ((sampleY - capture.Top) * capture.Width + x - capture.Left) * 4;
@@ -42,10 +44,14 @@ internal static class SubtitleLayout
                     if (plain) runTop = runTop < 0 ? y : runTop;
                     else if (runTop >= 0)
                     {
-                        if (y - runTop >= 400 && (best is null || y - runTop > best.Value.Height))
-                            best = new Rectangle(left, runTop, width, y - runTop);
+                        var candidate = new Rectangle(left, runTop, width, y - runTop);
+                        if (candidate.Height >= 400 && (best is null || candidate.Height > best.Value.Height)
+                            && (accepts?.Invoke(candidate) ?? true))
+                            best = candidate;
                         runTop = -1;
                     }
+                    // Flush the final run even when the last sampled row is shorter than four pixels.
+                    if (y == capture.Bottom) break;
                 }
             }
             if (best.HasValue) return best;
@@ -54,12 +60,12 @@ internal static class SubtitleLayout
     }
 
     internal static Rectangle[] FindPlainMargins(Rectangle capture, IReadOnlyList<Rectangle> masks, byte[] pixels,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Func<Rectangle, bool>? accepts = null)
     {
-        var first = FindPlainMargin(capture, masks, pixels, cancellationToken);
+        var first = FindPlainMargin(capture, masks, pixels, cancellationToken, accepts);
         if (first is null) return Array.Empty<Rectangle>();
         var blockers = masks.Append(first.Value).ToArray();
-        var second = FindPlainMargin(capture, blockers, pixels, cancellationToken);
+        var second = FindPlainMargin(capture, blockers, pixels, cancellationToken, accepts);
         return second is null ? new[] { first.Value } : new[] { first.Value, second.Value };
     }
 

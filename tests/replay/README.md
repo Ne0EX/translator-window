@@ -9,9 +9,20 @@ font sizes, colors, and output pixels.
 .\.tools\dotnet\dotnet.exe run --project tests\replay\ReplayCheck.csproj
 ```
 
-The committed cases cover caption containment, dense-page readable margins,
+The committed cases cover caption containment, dense-page readable margins
+(including a 701-pixel view and gutters inside dark window borders),
 colored covers, a sparse passing control, and stylized-text completeness. Text
 containers and protected artwork are annotations independent of OCR regions.
+The readability cases require large black-on-white margin cards, complete opaque
+fill inside an enclosed bubble (including pale lettering outside its detection),
+unchanged bubble outlines and exterior pixels, preservation of a second passage
+awaiting translation, light captions on dark fills, and dominant source-ink color
+when the Auto preset is selected. These checks use the public renderer only.
+The readability cases require large black-on-white margin cards, complete opaque
+fill inside an enclosed bubble (including pale lettering outside its detection),
+unchanged bubble outlines and exterior pixels, preservation of a second passage
+awaiting translation, light captions on dark fills, and dominant source-ink color
+when the Auto preset is selected. These checks use the public renderer only.
 The stylized fixture deliberately records one heading as
 `unresolved-before-recognized-text`; it verifies that the evidence keeps the
 missing passage separate from a successfully rendered body caption, rather than
@@ -34,6 +45,14 @@ Capture, OCR, translation and compositor presentation are outside this timer;
 passing does not establish smooth live scrolling in Comet.
 
 ## Opt-in diagnostics
+
+`--fixtures` also accepts local cases with `capturedView` (a path relative to the
+fixture file or an absolute path), `autoStyle: true`, and `localHeadings` containing
+region IDs required to stay at their source locations. Use fixed translations to
+isolate presentation on private source images; retain those manifests locally.
+Diagnostics are written before semantic verification so failed assertions retain
+their rendered evidence. The reference-page baseline is currently failing; the
+default synthetic suite does not claim that page's visual acceptance.
 
 Normal runs write no files. Pass a directory to record the generated captured
 view, rendered PNG, commit, capture metadata, recognition and translation data,
@@ -104,3 +123,18 @@ the shortened middle-left color passage is a current detection miss,
 grouping/recognition problem, translation issue, or old render. A complete local
 processing manifest is still required before making or rejecting a bounded OCR
 correction for issue #12.
+
+### Display heading replay
+
+`display-heading-treatment` exercises the public renderer with a synthetic red
+band and yellow lettering: complete local Thai, source-ink coverage, sampled
+fill, solid stroke/glow, explicit color/no-effect overrides, visual reuse,
+changed-source invalidation, nearby artwork and Stop. The standard suite has
+12 cases. `--performance` measures nine fresh frozen copies of each view; the
+median must remain under 16.67 ms. This is renderer timing, not live navigation.
+
+Private fixed-text cases may set `capturedView`, `autoStyle`, `localHeadings` and
+`sourceInkPoints`. The last field contains independently annotated original
+yellow-ink pixels checked on the cover layer before drawing translated text.
+It is a sparse coverage check, not proof that the entire lettering mask is clean.
+The three-heading reference remains local under `.cache/replay/reference-page/`.

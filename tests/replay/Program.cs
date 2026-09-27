@@ -58,18 +58,49 @@ internal static class Program
         Require(suite.SchemaVersion == 1 && suite.Cases.Length > 0, "Replay fixture schema is unsupported or empty.");
         foreach (var fixture in suite.Cases)
         {
-            BitmapSource frame = BuildFrame(fixture);
+            BitmapSource frame;
+            if (fixture.CapturedView is { } captured)
+            {
+                using var bitmap = new Drawing.Bitmap(Path.GetFullPath(Path.Combine(
+                    Path.GetDirectoryName(Path.GetFullPath(fixturePath))!, captured)));
+                frame = ToBitmapSource(bitmap);
+                Require(frame.PixelWidth == fixture.Width && frame.PixelHeight == fixture.Height,
+                    $"{fixture.Id}: captured image dimensions must match the fixture.");
+            }
+            else frame = BuildFrame(fixture);
             var first = Replay(fixture, frame, performance);
             var second = Replay(fixture, frame);
             Require(JsonSerializer.Serialize(first.Items) == JsonSerializer.Serialize(second.Items),
                 $"{fixture.Id}: repeated geometry, lines, font or color differed.");
             Require(first.RenderHash == second.RenderHash,
                 $"{fixture.Id}: repeated renderer pixels differed.");
-            Verify(fixture, first);
             if (diagnostics is not null) WriteDiagnostics(diagnostics, fixture, frame, first, "fixed-text");
+            Verify(fixture, first);
+            if (fixture.Background == "display-band")
+            {
+                int halo = (196 * fixture.Width + 333) * 4;
+                Require(Pixels(first.Rendered)[halo + 1] > 220,
+                    "Heading cover must remove the old red glyph halo beyond the detection rectangle.");
+                var guarded = fixture with { LocalHeadings = null, SourceInkPoints = null,
+                    Regions = fixture.Regions.Concat(new[] {
+                        new RegionFixture("pending", new Box(224, 205, 3, 12), "pending", "") }).ToArray() };
+                var pending = Replay(guarded, frame, allowMissing: true);
+                int offset = (205 * fixture.Width + 225) * 4;
+                Require(Pixels(frame).AsSpan(offset, 4).SequenceEqual(Pixels(pending.Rendered).AsSpan(offset, 4)),
+                    "Heading cover must preserve ink belonging to a pending overlapping region.");
+            }
+            if (fixture.Background == "bubble")
+            {
+                var progressive = fixture with { Regions = fixture.Regions.Concat(new[] {
+                    new RegionFixture("pending", new Box(291, 123, 4, 12), "pending", "") }).ToArray() };
+                var pending = Replay(progressive, frame, allowMissing: true);
+                int offset = (128 * fixture.Width + 293) * 4;
+                Require(Pixels(pending.Rendered)[offset] == 18,
+                    "Progressive bubble fill must not conceal a different passage still awaiting translation.");
+            }
             Console.WriteLine($"PASS {fixture.Id}: {first.Items.Count(item => item.Kind == "caption")} captions; render {first.RenderHash[..12]}.");
         }
-        Console.WriteLine($"PASS fixed-text replay: {suite.Cases.Length} redistribution-safe captured views repeated exactly.");
+        Console.WriteLine($"PASS fixed-text replay: {suite.Cases.Length} captured views repeated exactly.");
     }
 
     private static void RunProcessing(string manifestPath, string root, string? diagnostics)
@@ -117,7 +148,7 @@ internal static class Program
             processingRegions, Array.Empty<ContainerFixture>(), input.ProtectedArtwork,
             input.IntendedPassages.Select(passage => passage.RegionId is not null ? passage : passage with {
                 RegionId = processingRegions.FirstOrDefault(region => region.RecognizedText == passage.SourceText)?.Id
-            }).ToArray(), false, false, detected ?? Array.Empty<Box>());
+            }).ToArray(), false, false, detected ?? Array.Empty<Box>(), AutoStyle: input.AutoStyle);
         ReplayResult result;
         try { result = Replay(fixture, frame); }
         catch (SubtitleLayoutException error)
@@ -126,8 +157,8 @@ internal static class Program
                 "caption-placement", error);
             throw;
         }
-        Verify(fixture, result);
         if (diagnostics is not null) WriteDiagnostics(diagnostics, fixture, frame, result, "complete-processing");
+        Verify(fixture, result);
         Console.WriteLine($"PASS complete processing: {regions.Count} recognized regions reached {result.Items.Count(item => item.Kind == "caption")} captions.");
     }
 
@@ -163,7 +194,7 @@ internal static class Program
         }, _jsonOptions));
     }
 
-    private static ReplayResult Replay(ReplayCase fixture, BitmapSource frame, bool performance = false)
+    private static ReplayResult Replay(ReplayCase fixture, BitmapSource frame, bool performance = false, bool allowMissing = false)
     {
         var screen = Forms.Screen.PrimaryScreen?.Bounds ?? throw new InvalidOperationException("No primary display is available.");
         Require(fixture.Width <= screen.Width && fixture.Height <= screen.Height,
@@ -175,8 +206,11 @@ internal static class Program
         {
             bool japaneseToThai = fixture.SourceLanguage.StartsWith("ja", StringComparison.OrdinalIgnoreCase)
                 && fixture.TargetLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase);
+            var captionStyle = fixture.AutoStyle || fixture.Background == "colored-ink"
+                ? CaptionStyles.ResolveInstalled(new CaptionStyleOptions(CaptionRole.Auto)) : null;
             overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
-                SubtitleStyle.Overwrite, 6, frame, japaneseToThai);
+                SubtitleStyle.Overwrite, 6, frame, japaneseToThai, allowMissingTranslations: allowMissing,
+                captionStyle: captionStyle);
             overlay.UpdateLayout();
             if (performance)
             {
@@ -188,9 +222,10 @@ internal static class Program
                     nextFrame.Freeze();
                     var watch = Stopwatch.StartNew();
                     overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 6, nextFrame,
-                        japaneseToThai);
+                        japaneseToThai, captionStyle: captionStyle);
                     overlay.UpdateLayout();
                     elapsed[iteration] = watch.Elapsed.TotalMilliseconds;
+                    frame = nextFrame;
                 }
                 Array.Sort(elapsed);
                 Console.WriteLine($"TIMING {fixture.Id}: repeated captured view median={elapsed[4]:F2} ms; worst={elapsed[^1]:F2} ms.");
@@ -203,7 +238,74 @@ internal static class Program
                 ?? throw new InvalidOperationException("Subtitle overlay has no display transform.");
             var visuals = canvas.Children.OfType<Border>().ToArray();
             var items = visuals.Select(border => SceneItem.From(border, fixture, capture, desktop, transform)).ToArray();
+            if (fixture.LocalHeadings is { Length: > 0 } headings)
+            {
+                foreach (string id in headings)
+                {
+                    int index = Array.FindIndex(fixture.Regions, region => region.Id == id);
+                    Require(items.Any(item => item.RegionId == id && item.Kind == "caption"
+                        && item.FallbackReason != "readable-margin"),
+                        $"{fixture.Id}/{id}: the live heading still fell back to a margin caption.");
+                    var heading = visuals.Single(border => Equals(border.Tag, index) && border.Child is TextBlock);
+                    var text = (TextBlock)heading.Child;
+                    Require(text.Foreground is LinearGradientBrush && text.Background is DrawingBrush
+                        && text.Effect is System.Windows.Media.Effects.DropShadowEffect,
+                        $"{fixture.Id}/{id}: heading needs a sampled fill, solid glyph stroke and glow.");
+                }
+                overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
+                    SubtitleStyle.Overwrite, 6, frame, japaneseToThai, captionStyle: captionStyle);
+                overlay.UpdateLayout();
+                Require(visuals.Where(border => border.Child is TextBlock).All(border => canvas.Children.Contains(border)),
+                    $"{fixture.Id}: unchanged headings must reuse their visuals.");
+            }
+            if (fixture.SourceInkPoints is { } points)
+            {
+                var coverIndices = Enumerable.Range(0, items.Length).Where(i => items[i].Kind == "cover").ToArray();
+                var covered = Pixels(RenderCapturedView(frame, coverIndices.Select(i => visuals[i]).ToArray(),
+                    coverIndices.Select(i => items[i]).ToArray(), fixture.Width, fixture.Height));
+                foreach (var point in points)
+                    Require(!(covered[(point.Y * fixture.Width + point.X) * 4 + 1] > 175
+                        && covered[(point.Y * fixture.Width + point.X) * 4 + 1]
+                            > covered[(point.Y * fixture.Width + point.X) * 4] + 60),
+                        $"{fixture.Id}: original heading ink remains at {point.X},{point.Y} before drawing Thai: "
+                        + string.Join(",", covered.Skip((point.Y * fixture.Width + point.X) * 4).Take(4)));
+            }
             var rendered = RenderCapturedView(frame, visuals, items, fixture.Width, fixture.Height);
+            if (fixture.LocalHeadings is { Length: > 0 })
+            {
+                var custom = CaptionStyles.ResolveInstalled(new CaptionStyleOptions(CaptionRole.Auto,
+                    Foreground: "#0066FF", Effect: CaptionEffect.None));
+                overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
+                    SubtitleStyle.Overwrite, 6, frame, japaneseToThai, captionStyle: custom);
+                overlay.UpdateLayout();
+                foreach (var text in canvas.Children.OfType<Border>()
+                    .Where(border => border.Tag is int index && fixture.LocalHeadings.Contains(fixture.Regions[index].Id))
+                    .Select(border => border.Child).OfType<TextBlock>())
+                    Require(text.Foreground is SolidColorBrush color && color.Color == Color.FromRgb(0, 102, 255)
+                        && text.Effect is null && text.Background is null,
+                        $"{fixture.Id}: explicit color and no-effect settings must replace the automatic treatment.");
+                if (fixture.Background == "display-band")
+                {
+                    overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
+                        SubtitleStyle.Overwrite, 6, frame, japaneseToThai, captionStyle: captionStyle);
+                    var changedPixels = Pixels(frame);
+                    foreach (var region in fixture.Regions)
+                        Paint(changedPixels, fixture.Width, fixture.Height, region.Bounds.Drawing,
+                            (_, _) => ((byte)248, (byte)248, (byte)248));
+                    var changed = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                        PixelFormats.Bgra32, null, changedPixels, fixture.Width * 4);
+                    changed.Freeze();
+                    overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
+                        SubtitleStyle.Overwrite, 6, changed, japaneseToThai, captionStyle: captionStyle);
+                    overlay.UpdateLayout();
+                    Require(canvas.Children.OfType<Border>().Select(border => border.Child).OfType<TextBlock>()
+                        .All(text => text.Foreground is not LinearGradientBrush),
+                        $"{fixture.Id}: changing source pixels must invalidate the old display treatment.");
+                }
+                overlay.Clear();
+                Require(canvas.Children.Count == 0 && !overlay.IsVisible,
+                    $"{fixture.Id}: Stop must clear the styled caption layer.");
+            }
             string hash = Convert.ToHexString(SHA256.HashData(Pixels(rendered)));
             return new ReplayResult(items, hash, rendered);
         }
@@ -212,6 +314,25 @@ internal static class Program
 
     private static void Verify(ReplayCase fixture, ReplayResult result)
     {
+        if (fixture.Background == "bubble")
+        {
+            var pixels = Pixels(result.Rendered);
+            foreach (var point in new[] { new Drawing.Point(293, 128), new Drawing.Point(293, 277) })
+            {
+                int offset = (point.Y * fixture.Width + point.X) * 4;
+                Require(pixels[offset] == 248 && pixels[offset + 1] == 248 && pixels[offset + 2] == 248,
+                    "Enclosed bubble: source lettering outside the detection must be covered with its sampled fill.");
+            }
+            var source = Pixels(BuildFrame(fixture));
+            for (int y = 0; y < fixture.Height; y++)
+            for (int x = 0; x < fixture.Width; x++)
+                if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                {
+                    int offset = (y * fixture.Width + x) * 4;
+                    Require(source.AsSpan(offset, 4).SequenceEqual(pixels.AsSpan(offset, 4)),
+                        "Enclosed bubble: outline and exterior artwork must remain unchanged.");
+                }
+        }
         var image = new Drawing.Rectangle(0, 0, fixture.Width, fixture.Height);
         Require(result.Items.All(item => image.Contains(item.Bounds.Drawing)),
             $"{fixture.Id}: caption layer escaped the captured view.");
@@ -222,6 +343,13 @@ internal static class Program
             Require(CaptionText(caption!.Text) == region.Translation,
                 $"{fixture.Id}/{region.Id}: rendered text was shortened or changed.");
             Require(caption.FontSize >= 12, $"{fixture.Id}/{region.Id}: normal Thai caption fell below 12 DIP.");
+            if (fixture.LocalHeadings?.Contains(region.Id) == true)
+                Require(caption.FallbackReason is null && caption.Bounds.Drawing.IntersectsWith(region.Bounds.Drawing),
+                    $"{fixture.Id}/{region.Id}: reference heading must be typeset at its source, not in a margin.");
+            if (fixture.Background == "dark")
+                Require(caption.Foreground == "#FFFFFFFF", "Dark source fill needs a contrasting light caption.");
+            if (fixture.Background == "colored-ink")
+                Require(caption.Foreground == "#FFC82040", "Automatic caption style must retain the dominant red source ink.");
             var container = fixture.TextContainers.SingleOrDefault(value => value.RegionId == region.Id);
             if (container?.RequireCaptionInside == true)
             {
@@ -241,6 +369,10 @@ internal static class Program
                 $"{fixture.Id}: caption layer intersected protected artwork {protectedArea.Id}.");
         if (fixture.ExpectMarginCaption)
         {
+            Require(captions.Where(item => item.FallbackReason == "readable-margin")
+                    .All(item => item.FontSize >= 16 && item.Foreground == "#FF000000"
+                        && item.Background == "#FFFFFFFF"),
+                $"{fixture.Id}: side captions need at least 16 DIP and opaque black-on-white reading cards.");
             Require(result.Items.Any(item => item.Kind == "caption" && item.FallbackReason == "readable-margin"),
                 $"{fixture.Id}: dense content did not use its readable margin.");
             Require(fixture.Regions.All(region => result.Items.Count(item => item.Kind == "association-badge"
@@ -298,11 +430,13 @@ internal static class Program
         for (int x = 0; x < fixture.Width; x++)
         {
             (byte r, byte g, byte b) = fixture.Background switch {
+                "dark" => ((byte)24, (byte)24, (byte)24),
                 "colored" => ((byte)176, (byte)32, (byte)81),
                 "gradient" => ((byte)(68 + 18 * x / fixture.Width), (byte)(98 + 18 * x / fixture.Width), (byte)(170 + 18 * x / fixture.Width)),
-                "dense-margins" when x < 170 || x >= fixture.Width - 170 => ((byte)120, (byte)120, (byte)120),
-                "dense-margins" when (x / 12 + y / 12) % 2 == 0 => ((byte)30, (byte)30, (byte)30),
-                "dense-margins" => ((byte)225, (byte)225, (byte)225),
+                "dense-margins-window-border" when x < 8 || x >= fixture.Width - 16 => ((byte)24, (byte)24, (byte)24),
+                "dense-margins" or "dense-margins-window-border" when x < 170 || x >= fixture.Width - 170 => ((byte)120, (byte)120, (byte)120),
+                "dense-margins" or "dense-margins-window-border" when (x / 12 + y / 12) % 2 == 0 => ((byte)30, (byte)30, (byte)30),
+                "dense-margins" or "dense-margins-window-border" => ((byte)225, (byte)225, (byte)225),
                 _ => ((byte)248, (byte)248, (byte)248)
             };
             Set(pixels, fixture.Width, x, y, r, g, b);
@@ -310,13 +444,35 @@ internal static class Program
         foreach (var area in fixture.ProtectedArtwork)
             Paint(pixels, fixture.Width, fixture.Height, area.Bounds.Drawing, (x, y) =>
                 (x / 5 + y / 5) % 2 == 0 ? ((byte)25, (byte)65, (byte)105) : ((byte)210, (byte)160, (byte)40));
+        if (fixture.Background == "bubble")
+        {
+            Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(220, 105, 155, 195), (x, y) => {
+                double radius = Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2);
+                return radius >= 0.94 && radius <= 1 ? ((byte)18, (byte)18, (byte)18)
+                    : ((byte)248, (byte)248, (byte)248);
+            });
+            Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(291, 123, 4, 12),
+                (_, _) => ((byte)18, (byte)18, (byte)18));
+            Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(291, 272, 4, 12),
+                (_, _) => ((byte)223, (byte)223, (byte)223));
+        }
         foreach (var region in fixture.Regions)
         {
             var box = region.Bounds.Drawing;
+            if (fixture.Background == "display-band" && region.Id == "headline")
+                Paint(pixels, fixture.Width, fixture.Height, box,
+                    (_, _) => ((byte)250, (byte)40, (byte)85));
             for (int x = box.Left + 4; x < box.Right - 3; x += 8)
                 Paint(pixels, fixture.Width, fixture.Height,
-                    new Drawing.Rectangle(x, box.Top + 5, 3, Math.Max(1, box.Height - 10)), (_, _) => ((byte)18, (byte)18, (byte)18));
+                    new Drawing.Rectangle(x, box.Top + 5, 3, Math.Max(1, box.Height - 10)), (_, _) =>
+                        fixture.Background == "display-band" && region.Id == "headline" ? ((byte)255, (byte)235, (byte)50)
+                        : fixture.Background == "dark" ? ((byte)248, (byte)248, (byte)248)
+                        : fixture.Background == "colored-ink" ? ((byte)200, (byte)32, (byte)64)
+                        : ((byte)18, (byte)18, (byte)18));
         }
+        if (fixture.Background == "display-band")
+            Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(330, 194, 7, 12),
+                (_, _) => ((byte)250, (byte)40, (byte)85));
         var frame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
             PixelFormats.Bgra32, null, pixels, fixture.Width * 4);
         frame.Freeze();
@@ -456,7 +612,9 @@ internal static class Program
     private sealed record ReplayCase(string Id, string DefectClass, int Width, int Height, double Dpi, double Zoom,
         string SourceLanguage, string TargetLanguage, string Background, RegionFixture[] Regions,
         ContainerFixture[] TextContainers, ProtectedFixture[] ProtectedArtwork, PassageFixture[] IntendedPassages,
-        bool ExpectMarginCaption = false, bool ExpectColoredCaption = false, Box[]? DetectedRegions = null)
+        bool ExpectMarginCaption = false, bool ExpectColoredCaption = false, Box[]? DetectedRegions = null,
+        string? CapturedView = null, bool AutoStyle = false, string[]? LocalHeadings = null,
+        Box[]? SourceInkPoints = null)
     {
         public int SchemaVersion => 1;
     }
@@ -465,7 +623,8 @@ internal static class Program
     private sealed record ProtectedFixture(string Id, Box Bounds);
     private sealed record PassageFixture(string Id, string SourceText, string? RegionId, string ExpectedStage, Box? Bounds = null);
     private sealed record ProcessingInput(string Id, string CapturedView, double Dpi, double Zoom,
-        string SourceLanguage, string TargetLanguage, PassageFixture[] IntendedPassages, ProtectedFixture[] ProtectedArtwork);
+        string SourceLanguage, string TargetLanguage, PassageFixture[] IntendedPassages, ProtectedFixture[] ProtectedArtwork,
+        bool AutoStyle = false);
     private sealed record Box(int X, int Y, int Width, int Height)
     {
         public Drawing.Rectangle Drawing => new(X, Y, Width, Height);
