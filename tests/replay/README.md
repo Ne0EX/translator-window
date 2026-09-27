@@ -108,6 +108,74 @@ The processing report uses the domain outcomes `detection-miss`,
 rectangle, missing text remains `unresolved-before-recognized-text`; the check
 does not guess which earlier stage failed.
 
+### Colored words inside a pale speech bubble
+
+This opt-in regression uses the approved complete-processing boundary. Supply the
+private 1524 × 810 Senmanga captured view as
+`.cache/replay/senmanga-acceptance/45-color-dialogue.png`; publisher images are not
+included in the repository. Stop the live translation session before running it
+so the replay has the local models to itself.
+
+The independently read source passage is `たとえどんなに攻略困難な相手でもね!`.
+The original recognizer skipped `攻略困難な`. The following manifest supplies
+only the required source literal and location: detection, recognized text,
+translation and caption placement all come from the actual processing pipeline.
+It preserves the whole captured view and all detected regions.
+
+Run from the repository root. Use a fresh diagnostics directory for each RED or
+GREEN attempt; keep both reports and console output.
+
+```powershell
+$evidence = ".cache/replay/colored-word"
+$phase = "red" # Change to green after the implementation.
+New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+@'
+{
+  "id": "45-colored-word-complete",
+  "capturedView": "../senmanga-acceptance/45-color-dialogue.png",
+  "sourceLanguage": "ja-comic", "targetLanguage": "th",
+  "autoStyle": true, "dpi": 96, "zoom": 0.8,
+  "protectedArtwork": [],
+  "intendedPassages": [{
+    "id": "colored-opponent",
+    "sourceText": "たとえどんなに攻略困難な相手でもね!",
+    "regionId": null, "expectedStage": "caption-complete",
+    "bounds": [388, 485, 134, 167]
+  }]
+}
+'@ | Set-Content -Encoding UTF8 "$evidence/processing.json"
+if (Test-Path "$evidence/$phase") { throw "Use a fresh diagnostics directory." }
+New-Item -ItemType Directory -Path "$evidence/$phase" | Out-Null
+.\.tools\dotnet\dotnet.exe run --project tests/replay/ReplayCheck.csproj -c Release -- `
+  --processing "$evidence/processing.json" --root . --diagnostics "$evidence/$phase" `
+  2>&1 | Tee-Object -FilePath "$evidence/$phase/console.log"
+$fullHarnessExit = $LASTEXITCODE
+Write-Output "Full harness exit: $fullHarnessExit"
+$report = Get-Content -Raw -Encoding UTF8 "$evidence/$phase/45-colored-word-complete.json" | ConvertFrom-Json
+$literal = "たとえどんなに攻略困難な相手でもね!"
+$stage = @($report.stageOutcomes | Where-Object id -eq "colored-opponent")
+$region = @($report.regions | Where-Object recognizedText -eq $literal)
+if ($stage.Count -ne 1 -or $stage[0].observedStage -ne "caption-complete" -or $region.Count -ne 1) {
+  throw "Complete colored source passage did not reach a caption."
+}
+$caption = @($report.captions | Where-Object { $_.kind -eq "caption" -and $_.regionId -eq $region[0].id })
+if ($caption.Count -ne 1 -or $null -ne $caption[0].fallbackReason -or `
+    $caption[0].text.Replace("`r", "").Replace("`n", "") -ne $region[0].translation) {
+  throw "The complete translation must be shown locally without shortening."
+}
+Write-Output "PASS targeted colored passage; full harness exit remains $fullHarnessExit."
+```
+
+The recorded RED reports `recognition-error`; GREEN reports `caption-complete`
+and shows `ไม่ว่าคู่ต่อสู้จะยากที่จะเอาชนะแค่ไหนก็ตาม!` locally at 24 DIP. Both
+full-harness attempts still fail on unrelated toolbar region 5 having no caption.
+Keep that failure visible; the focused passage assertion does not establish a
+passing whole view. All 13 detected regions retain their geometry and the other
+12 recognized texts stay unchanged. Region 4's Thai heading wording varies
+between the two runs despite unchanged OCR, so translation equality across every
+region is not claimed. Private evidence and the executed assertion script remain
+under `.cache/replay/45-colored-recognition/`.
+
 ## Local evidence inventory and limit
 
 Ignored local evidence already includes `.cache/diagnostics/manga-preview/`

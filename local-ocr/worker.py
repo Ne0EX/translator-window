@@ -533,8 +533,19 @@ def process_image(image, language, known, detector, get_recognizer, progress=Fal
             return {"regions": regions, "reused": reused}
         from PIL import Image
         recognizer = get_recognizer()
-        crops = [[Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                  for crop in recognition_crops(image, region)] for _, region in pending]
+        crops = []
+        for _, region in pending:
+            group = []
+            for crop in recognition_crops(image, region):
+                paper = np.median(crop, axis=(0, 1))
+                grayscale = crop.min(axis=2)
+                # ponytail: crop median approximates neutral near-white paper;
+                # textured-background failures would need segmentation instead.
+                if np.median(grayscale) >= 232 and paper.max() - paper.min() <= 8:
+                    group.append(Image.fromarray(grayscale))
+                else:
+                    group.append(Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)))
+            crops.append(group)
         batch_size = 8 if progress else 32  # At most two crops per region; recognizer accepts 64.
         for offset in range(0, len(crops), batch_size):
             batch = pending[offset:offset + batch_size]

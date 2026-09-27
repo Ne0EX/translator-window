@@ -747,3 +747,50 @@ the existing NU1900 advisory-feed and test-build WFAC010 warnings remain.
 Private evidence is in `.cache/replay/bubble-neighbor-final-results/` and
 `.cache/replay/senmanga-acceptance/neighbor-final-comparison/`. Full live chapter
 acceptance and the previously documented source-content losses remain open.
+
+### Recover colored words on neutral bubble paper — 2026-09-28
+
+The missing red words in view 45 were a recognition error: the detector crop
+contained the whole passage, but luminance grayscale weakened the colored ink.
+The shared Japanese recognition path now uses the darkest RGB channel when its
+median brightness is at least 232 and the crop's median channels differ by at
+most eight levels. Checking brightness jointly prevents separate colored pixels
+from falsely implying white paper. Other crops retain their previous input.
+This is a crop-level paper estimate,
+not bubble segmentation; crop geometry, grouping, model weights and decoding
+remain unchanged for both supported recognition backends.
+
+The complete-processing replay first failed the intended source literal
+`たとえどんなに攻略困難な相手でもね!`, then recovered it after the change. Its
+actual Thai translation is complete and local at 24 DIP in bounds
+`[351,456,191,204]`; the rendered result was visually inspected. All 13 detector
+regions retain their bounds. Only the target's recognized text changes. A
+separate heading's translation varies despite unchanged recognized text, so
+this comparison does not establish deterministic translation. The full-view
+check still fails on the existing unrelated toolbar caption; the targeted
+passage check passes without changing the full-view assertions.
+
+The prior bounded probe also recovered the same passage in view 46. Five colored
+heading crops and the dark-bubble control retain their original preprocessing
+path. All 54 saved chart crops produce identical grayscale pixels. On view 45's
+13 crops, 31 warm preparation measurements increase the median from 0.62 to
+10.17 ms: about 9.54 ms extra per newly recognized view on this machine. This
+excludes model inference and is not a live frame-rate measurement. Known-region
+reuse and the renderer are unchanged. Private source, RED/GREEN reports, timing
+samples and runnable checks remain in `.cache/replay/45-colored-recognition/`;
+the reproduction recipe is in `tests/replay/README.md`.
+
+Review caught a colored-background counterexample before commit: independent
+channel medians could classify cyan/magenta/yellow pixels as white, then collapse
+their contrast. The final joint-brightness guard rejects it and retains the
+original input. The complete-processing target passed again with that guard;
+the timing above measures the final guarded implementation.
+
+Before this OCR change, the refreshed `f1094d6` app was exercised through Start,
+Senmanga scrolling and Stop. A settled view reported 16 translated blocks and
+one styled heading; Stop restored the idle controls and terminated model
+processes. Computer Use now operates the capture dropdown using screenshot-only
+popup observations. Its screenshots exclude the caption layer, so this live
+check establishes session behavior, not visual overlay acceptance or smoothness.
+The chapter-wide acceptance goal and the other documented detection/recognition
+losses remain open.
