@@ -683,3 +683,67 @@ narrow crop. It still mixed neighboring columns and omitted the required
 literal passage. The initial `一` is visible inside the crop, so its loss is
 recognition failure rather than clipping. These diagnoses changed no production
 code or published app binary; the `81954c3` checkpoint remains unchanged.
+
+### Neutral bubble paper and remaining fit limits — 2026-09-28
+
+Qualified closed bubbles now reconstruct neutral near-white paper as white.
+Every sampled RGB channel must be at least 232, with at most eight levels
+between channels. Sampling, flood connectivity, the coverage mask and artwork
+qualification still use the original color. Footprint and gradient covers are
+unchanged. This intentionally flattens faint gray shading; genuinely tinted
+and darker bubbles retain their sampled fill.
+
+The public renderer regression fails on the preceding binary and passes with
+the change. All 14 standard cases pass, including pale tint, dark fill, gradient,
+pending text, border and artwork controls. View 45 retains its complete local
+23-DIP caption and identical placement, with the large gray/white seams removed.
+Some pale edge flecks remain. All 124 checked outline pixels are preserved;
+view 11 is byte-identical to the protected-floor reference.
+
+The direct 16-view comparison against the `81954c3` combined renderer changes
+no caption bounds, font, text, lines or fallback decisions. Its six strict
+passes and ten existing failures remain unchanged. The private direct report is
+`neutral-paper-comparison/versus-81954c3-combined.json` under the later-chapter
+processing evidence. The runner's separate comparison against the older median
+baseline contains earlier improvements and must not be attributed to this fix.
+
+View 19's remaining long margin caption has a valid source cover. Exhaustive
+vertical placement with the existing complete-word boundaries and full-height
+line strips still cannot fit at 12 DIP. It fits at 11 DIP, below the readability
+floor, so the floor and full translation are retained. This establishes a limit
+of the current layout model, not of every possible typographic arrangement.
+No model inference or source-text rewriting was used in these layout checks.
+
+### Preserve neighboring text without discarding the bubble
+
+View 45's right passage occupies one connected two-lobed bubble. Its qualified
+cover touched 524 pixels of a separate lower heading, causing the entire cover
+to be rejected. Closed bubble covers now exclude conflicting detected regions
+that lie outside their own text region. A neighbor overlapping the target text
+still rejects the cover; display-heading covers retain their previous guard.
+One copied mask governs both painting and caption fitting. Exclusion scans use
+the existing work budget and cancellation checks; frozen-view reuse is retained.
+
+The public Thai regression fails before this change and passes afterward,
+checking a real source stroke plus exact pending-text, outline and artwork
+preservation. View 45's complete right passage moves from the margin at 18 DIP
+to the bubble at 19 DIP across 11 lines. Every pixel in the pending lower
+heading's detected region is preserved, as are the checked colored halo pixels
+outside the target text. The known unrelated toolbar sanitation failure remains.
+
+The final 16-view comparison introduces no lost captions, local-to-margin moves
+or new strict failures. View 46's two complete captions increase from 24 to
+25/27 DIP; a nearby small caption decreases from 15 to 14 DIP to respect the
+neighbor exclusion. That one-DIP reduction is an accepted placement tradeoff.
+Other reported changes are line wrapping and the margin rows moving upward
+after a caption returns to its bubble. No translation is shortened.
+
+All 14 standard renderer cases repeat exactly. Current-source repeat medians
+are 0.23–0.96 ms, worst repeat 3.33 ms; first layouts are 74.41–511.75 ms.
+These are isolated renderer measurements, not live FPS or translation latency.
+The complete session lifecycle suite passes, including progressive captions,
+navigation recovery, stale-result rejection and Stop. Release publish succeeds;
+the existing NU1900 advisory-feed and test-build WFAC010 warnings remain.
+Private evidence is in `.cache/replay/bubble-neighbor-final-results/` and
+`.cache/replay/senmanga-acceptance/neighbor-final-comparison/`. Full live chapter
+acceptance and the previously documented source-content losses remain open.

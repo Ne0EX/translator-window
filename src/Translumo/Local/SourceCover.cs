@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Threading;
 
@@ -31,6 +32,32 @@ public sealed class SourceCoverPlan
 
     internal bool Covers(int x, int y) => PermittedArea.Contains(x, y)
         && mask[(y - PermittedArea.Top) * PermittedArea.Width + x - PermittedArea.Left];
+
+    internal SourceCoverPlan? Excluding(IReadOnlyList<Rectangle> areas, Action<int> sampleRow,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var clipped = (bool[])mask.Clone();
+        int covered = CoveredPixelCount;
+        foreach (var area in areas)
+        {
+            var overlap = Rectangle.Intersect(area, PermittedArea);
+            for (int y = overlap.Top; y < overlap.Bottom; y++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                sampleRow(overlap.Width);
+                for (int x = overlap.Left; x < overlap.Right; x++)
+                {
+                    int offset = (y - PermittedArea.Top) * PermittedArea.Width + x - PermittedArea.Left;
+                    if (!clipped[offset]) continue;
+                    clipped[offset] = false;
+                    covered--;
+                }
+            }
+        }
+        return covered == 0 ? null : new SourceCoverPlan(Classification, image, PermittedArea,
+            FootprintBounds, clipped, reconstruction, covered);
+    }
 
     public byte[] CreatePatch(CancellationToken cancellationToken = default)
     {
@@ -204,11 +231,15 @@ public static class SourceCover
         if (ink < 4 || ink > covered * 0.35
             || HasLargeNonTextComponent(holes, search, bounds, ink, cancellationToken, text)) return null;
         // OCR corners can cross the exterior of offset joined bubbles; only the qualified contour is painted.
+        // Neutral near-white paper uses white reconstruction; retain the sampled color for qualification and tinted fills.
+        bool whitePaper = fill.B >= 232 && fill.G >= 232 && fill.R >= 232
+            && Math.Max(fill.B, Math.Max(fill.G, fill.R)) - Math.Min(fill.B, Math.Min(fill.G, fill.R)) <= 8;
+        var reconstructionFill = whitePaper ? new Pixel(255, 255, 255) : fill;
         var reconstruction = new byte[count * 4];
         for (int i = 0; i < count; i++)
         {
-            reconstruction[i * 4] = fill.B; reconstruction[i * 4 + 1] = fill.G;
-            reconstruction[i * 4 + 2] = fill.R; reconstruction[i * 4 + 3] = 255;
+            reconstruction[i * 4] = reconstructionFill.B; reconstruction[i * 4 + 1] = reconstructionFill.G;
+            reconstruction[i * 4 + 2] = reconstructionFill.R; reconstruction[i * 4 + 3] = 255;
         }
         return new SourceCoverPlan(SourceCoverClass.Plain, new Rectangle(0, 0, width, height),
             search, bounds, inside, reconstruction, covered);

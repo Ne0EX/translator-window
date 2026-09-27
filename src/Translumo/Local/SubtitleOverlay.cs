@@ -1207,11 +1207,19 @@ public sealed class SubtitleOverlay : Window
             {
                 var bubble = plan.FootprintBounds;
                 bubble.Offset(capture.Location);
-                if (sources.Any(other => other != source && Conflicts(other)))
+                List<Drawing.Rectangle>? exclusions = null;
+                foreach (var other in sources)
                 {
+                    if (other == source || !Conflicts(other)) continue;
                     if (display is not null) return null;
-                    plan = null;
+                    if (other.IntersectsWith(source)) { plan = null; break; }
+                    // Keep the closed bubble, but leave neighboring passages untouched until their own cover is ready.
+                    var excluded = other;
+                    excluded.Offset(-capture.X, -capture.Y);
+                    (exclusions ??= new()).Add(excluded);
                 }
+                if (plan is not null && exclusions is not null)
+                    plan = plan.Excluding(exclusions, workBudget.SampleBackgroundRow, cancellationToken);
 
                 bool Conflicts(Drawing.Rectangle other)
                 {
@@ -1219,8 +1227,12 @@ public sealed class SubtitleOverlay : Window
                     if (overlap.IsEmpty) return false;
                     // A cover's transparent bounding-box fringe can overlap the next OCR region.
                     for (int y = overlap.Top; y < overlap.Bottom; y++)
-                    for (int x = overlap.Left; x < overlap.Right; x++)
-                        if (plan.Covers(x - capture.X, y - capture.Y)) return true;
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        workBudget.SampleBackgroundRow(overlap.Width);
+                        for (int x = overlap.Left; x < overlap.Right; x++)
+                            if (plan.Covers(x - capture.X, y - capture.Y)) return true;
+                    }
                     return false;
                 }
             }

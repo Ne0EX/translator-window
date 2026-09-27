@@ -187,6 +187,32 @@ internal static class Program
                 var cornerNeighbor = fixture with { Regions = fixture.Regions.Concat(new[] {
                     new RegionFixture("neighbor", new Box(225, 110, 12, 15), "pending", "") }).ToArray() };
                 Verify(fixture, Replay(cornerNeighbor, frame, allowMissing: true));
+                var pendingNeighbor = new Box(245, 270, 110, 18);
+                var neighborPixels = Pixels(frame);
+                foreach (int x in new[] { 280, 288 })
+                    Paint(neighborPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(x, 278, 3, 3),
+                        (_, _) => ((byte)18, (byte)18, (byte)18));
+                var neighborFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, neighborPixels, fixture.Width * 4);
+                neighborFrame.Freeze();
+                var neighborDialogue = fixture with { Background = "neighbor-bubble", Regions = new[] {
+                    fixture.Regions[0] with { Translation = "ฉันจะใช้ทุกสิ่งที่สามารถใช้ได้เพื่อช่วยเหลือ!" } } };
+                var neighborFixture = neighborDialogue with { Regions = neighborDialogue.Regions.Concat(new[] {
+                    new RegionFixture("pending", pendingNeighbor, "…", "") }).ToArray() };
+                var neighborResult = Replay(neighborFixture, neighborFrame, allowMissing: true);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics,
+                    neighborFixture with { Id = "bubble-beside-pending-text" }, neighborFrame, neighborResult, "fixed-text");
+                Verify(neighborDialogue, neighborResult);
+                var neighborRendered = Pixels(neighborResult.Rendered);
+                Require(neighborRendered[(125 * fixture.Width + 292) * 4] == 255,
+                    "A neighboring pending passage must not prevent full bubble coverage of original lettering.");
+                for (int y = 105; y < 300; y++)
+                for (int x = 220; x < 375; x++)
+                    if (pendingNeighbor.Drawing.Contains(x, y)
+                        || Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                        Require(neighborPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(neighborRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Fitting beside pending text must preserve that entire region and the bubble outline and exterior.");
                 var roundedDetection = fixture with { Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(235, 145, 120, 120) } } };
                 Verify(roundedDetection, Replay(roundedDetection, frame));
@@ -199,7 +225,7 @@ internal static class Program
                 var punctuationResult = Replay(fixture, punctuationFrame);
                 Verify(fixture, punctuationResult);
                 Require(punctuationResult.Items.Single(item => item.Kind == "caption").FontSize >= 28
-                    && Pixels(punctuationResult.Rendered)[(156 * fixture.Width + 273) * 4] == 248,
+                    && Pixels(punctuationResult.Rendered)[(156 * fixture.Width + 273) * 4] == 255,
                     "A punctuation-sized compact mark inside detected text must be covered and retain roomy bubble layout.");
                 var shortUtterance = fixture with { Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(287, 165, 24, 74) } },
@@ -216,8 +242,8 @@ internal static class Program
                 var shortUtteranceResult = Replay(shortUtterance, texturedFrame);
                 Verify(shortUtterance, shortUtteranceResult);
                 var shortRendered = Pixels(shortUtteranceResult.Rendered);
-                Require(Math.Abs(shortRendered[(261 * fixture.Width + 337) * 4] - 248) <= 1,
-                    "A short utterance must use its full closed bubble with a solid sampled fill over faint texture.");
+                Require(Math.Abs(shortRendered[(261 * fixture.Width + 337) * 4] - 255) <= 1,
+                    "A short utterance must use its full closed bubble with solid white paper over faint neutral texture.");
                 for (int y = 118; y < 290; y++)
                 for (int x = 236; x < 362; x++)
                     if (Math.Pow((x - 299d) / 63, 2) + Math.Pow((y - 204d) / 86, 2) >= 0.94)
@@ -234,6 +260,11 @@ internal static class Program
                         Set(highlightedPixels, fixture.Width, x, y, highlight ? (byte)253 : (byte)238,
                             highlight ? (byte)252 : (byte)237, highlight ? (byte)255 : (byte)242);
                     }
+                Paint(highlightedPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(220, 195, 32, 12),
+                    (x, y) => Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) < 0.94
+                        ? ((byte)255, (byte)255, (byte)255)
+                        : (highlightedPixels[(y * fixture.Width + x) * 4 + 2],
+                            highlightedPixels[(y * fixture.Width + x) * 4 + 1], highlightedPixels[(y * fixture.Width + x) * 4]));
                 var highlightedFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
                     PixelFormats.Bgra32, null, highlightedPixels, fixture.Width * 4);
                 highlightedFrame.Freeze();
@@ -243,11 +274,19 @@ internal static class Program
                     highlightedFixture with { Id = "highlighted-bubble" }, highlightedFrame, highlightedResult, "fixed-text");
                 Verify(highlightedFixture, highlightedResult);
                 var highlightedRendered = Pixels(highlightedResult.Rendered);
+                foreach (var point in new[] { new Drawing.Point(244, 200), new Drawing.Point(244, 210),
+                    new Drawing.Point(293, 128) })
+                {
+                    int pixel = (point.Y * fixture.Width + point.X) * 4;
+                    Require(highlightedRendered[pixel] == 255 && highlightedRendered[pixel + 1] == 255
+                        && highlightedRendered[pixel + 2] == 255,
+                        "Neutral near-white bubble paper must use a coherent white cover across highlights, adjacent fill and original lettering.");
+                }
                 foreach (var point in new[] { new Drawing.Point(293, 128), new Drawing.Point(293, 277) })
                 {
                     int pixel = (point.Y * fixture.Width + point.X) * 4;
-                    Require(highlightedRendered[pixel] == 242 && highlightedRendered[pixel + 1] == 237
-                        && highlightedRendered[pixel + 2] == 238,
+                    Require(highlightedRendered[pixel] == 255 && highlightedRendered[pixel + 1] == 255
+                        && highlightedRendered[pixel + 2] == 255,
                         "A pale bubble highlight must not split source coverage or leave original lettering visible.");
                 }
                 for (int y = 0; y < fixture.Height; y++)
@@ -256,6 +295,32 @@ internal static class Program
                         Require(highlightedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(highlightedRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Crossing an interior highlight must preserve the closed bubble outline and exterior artwork.");
+                var tintedPixels = Pixels(frame);
+                for (int y = 105; y < 300; y++)
+                for (int x = 220; x < 375; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) < 0.94
+                        && tintedPixels[(y * fixture.Width + x) * 4] == 248)
+                        Set(tintedPixels, fixture.Width, x, y, 250, 233, 247);
+                var tintedFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, tintedPixels, fixture.Width * 4);
+                tintedFrame.Freeze();
+                var tintedFixture = fixture with { Background = "pale-tinted-bubble" };
+                var tintedResult = Replay(tintedFixture, tintedFrame);
+                Verify(tintedFixture, tintedResult);
+                var tintedRendered = Pixels(tintedResult.Rendered);
+                foreach (var point in new[] { new Drawing.Point(293, 128), new Drawing.Point(293, 277) })
+                {
+                    int pixel = (point.Y * fixture.Width + point.X) * 4;
+                    Require(tintedRendered[pixel] == 247 && tintedRendered[pixel + 1] == 233
+                        && tintedRendered[pixel + 2] == 250,
+                        "A genuinely tinted pale bubble must retain its sampled color over original lettering.");
+                }
+                for (int y = 0; y < fixture.Height; y++)
+                for (int x = 0; x < fixture.Width; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                        Require(tintedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(tintedRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Retaining a pale bubble tint must preserve its outline and exterior artwork.");
                 var weakBoundaryPixels = Pixels(frame);
                 Paint(weakBoundaryPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(185, 100, 195, 205),
                     (x, y) => Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) > 1
@@ -274,7 +339,7 @@ internal static class Program
                 var weakBoundaryResult = Replay(fixture, weakBoundaryFrame);
                 var weakRendered = Pixels(weakBoundaryResult.Rendered);
                 Verify(fixture with { Background = "weak-boundary" }, weakBoundaryResult);
-                Require(weakRendered[(128 * fixture.Width + 293) * 4] == 248,
+                Require(weakRendered[(128 * fixture.Width + 293) * 4] == 255,
                     "A faint boundary must retain full bubble coverage of original lettering.");
                 for (int y = 100; y < 305; y++)
                 for (int x = 185; x < 380; x++)
@@ -442,7 +507,7 @@ internal static class Program
                     Require(translatedInk >= 8,
                         "Offset joined captions must use both lobes, with translated glyphs following each lobe's horizontal position.");
                 }
-                Require(offsetRendered[(140 * fixture.Width + 321) * 4] == 248,
+                Require(offsetRendered[(140 * fixture.Width + 321) * 4] == 255,
                     "Offset joined bubbles must cover the upper lobe's source ink even when the OCR corners lie outside.");
                 for (int y = 105; y < 310; y++)
                 for (int x = 220; x < 375; x++)
@@ -470,8 +535,8 @@ internal static class Program
                 Verify(whiteOffset, whiteOffsetResult);
                 var whiteOffsetRendered = Pixels(whiteOffsetResult.Rendered);
                 Require(whiteOffsetResult.Items.Single(item => item.Kind == "caption").FallbackReason is null
-                    && whiteOffsetRendered[(140 * fixture.Width + 321) * 4] == 248
-                    && whiteOffsetRendered[(236 * fixture.Width + 278) * 4] == 248,
+                    && whiteOffsetRendered[(140 * fixture.Width + 321) * 4] == 255
+                    && whiteOffsetRendered[(236 * fixture.Width + 278) * 4] == 255,
                     "A joined bubble on matching exterior paper must conceal both source passages and retain its caption locally.");
                 var whiteOffsetRepeated = Replay(whiteOffset, whiteOffsetFrame);
                 Require(whiteOffsetRepeated.RenderHash == whiteOffsetResult.RenderHash,
@@ -521,7 +586,7 @@ internal static class Program
                 wideBubble = wideBubble with { Background = "wide-bubble" };
                 var wideResult = Replay(wideBubble, wideFrame);
                 Verify(wideBubble, wideResult);
-                Require(Pixels(wideResult.Rendered)[(128 * fixture.Width + 293) * 4] == 248,
+                Require(Pixels(wideResult.Rendered)[(128 * fixture.Width + 293) * 4] == 255,
                     "A tall narrow detection must find the full wider bubble and cover its original lettering.");
                 var darkPixels = Pixels(inkFrame);
                 for (int pixelOffset = 0; pixelOffset < darkPixels.Length; pixelOffset += 4)
@@ -798,8 +863,8 @@ internal static class Program
             foreach (var point in new[] { new Drawing.Point(293, 128), new Drawing.Point(293, 277) })
             {
                 int offset = (point.Y * fixture.Width + point.X) * 4;
-                Require(pixels[offset] == 248 && pixels[offset + 1] == 248 && pixels[offset + 2] == 248,
-                    "Enclosed bubble: source lettering outside the detection must be covered with its sampled fill.");
+                Require(pixels[offset] == 255 && pixels[offset + 1] == 255 && pixels[offset + 2] == 255,
+                    "Enclosed bubble: source lettering outside the detection must be covered with white paper.");
             }
             var source = Pixels(BuildFrame(fixture));
             for (int y = 0; y < fixture.Height; y++)
