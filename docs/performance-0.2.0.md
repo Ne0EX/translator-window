@@ -794,3 +794,76 @@ popup observations. Its screenshots exclude the caption layer, so this live
 check establishes session behavior, not visual overlay acceptance or smoothness.
 The chapter-wide acceptance goal and the other documented detection/recognition
 losses remain open.
+
+## 2026-09-28: actual live caption evidence and display-scale fixes
+
+The opt-in procedure in `tests/replay/README.md` exports the accepted live WPF
+canvas and its associated source frame. It does not rerender a replay or alter
+capture exclusion. The source hash, assembly module ID, screen mapping, captions
+and fonts are recorded. PNG encoding is diagnostic work and must be excluded
+from performance measurements. A still cannot establish compositor visibility,
+navigation smoothness or absence of flicker.
+
+The actual Senmanga capture is 2286 by 1215 pixels at 144 DPI. Its colored
+opponent passage is recognized completely and shown locally at 24 DIP. The
+first export was fully clipped by maximized app controls and correctly fails
+the artifact checker. A later scrolled view retains a recognition error and a
+displayed-text mismatch; neither is hidden by the successful target check.
+
+The matched fixed-text replay reproduces every original live caption's bounds,
+font size and displayed text. It revealed two layout defects:
+
+- The right connected bubble's initial search covered 1,688,850 pixels, above
+  the existing one-million-pixel limit. Search padding now shrinks to fit the
+  limit while preserving the detected region. Repeated scans of identical
+  full-height strips are reused within one font-fitting attempt. The complete
+  caption moves from an 18-DIP margin to 29 DIP inside both lobes, with 11 lines
+  in `[1444,350,265,638]`. Flood limits and the 12-DIP reading floor are unchanged.
+- The upper-left bubble's mask classified some black and red lettering as
+  connected to the exterior. The existing independent source-footprint check
+  qualifies those pixels. Combining that footprint with the closed bubble,
+  before neighboring-text exclusions, removes the strong remaining lettering.
+  The existing bubble reconstruction color is retained. The caption still uses
+  27 DIP and the same six unevenly positioned lines; faint remnants and unused
+  interior space remain. This is not seamless whole-bubble acceptance.
+
+For the right-bubble fix alone, a paired three-case run using immutable baseline
+and fixed binaries measured warm fresh-overlay layouts of 588.81/461.09 ms
+versus 648.35/487.78 ms: an observed 27–60 ms increase (5.8–10.1%). Warm repeated
+view medians were 4.63/4.20 ms versus 3.91/4.07 ms. Initialization and tiered JIT
+still trend downward, so these are observations rather than a stable latency
+estimate. They exclude the separate footprint-union change. Live completion
+status can include prior progressive layout/cache work and is not comparable
+to constructing a fresh overlay.
+
+With the footprint repair included, the same three-case sequence measured
+953.93/545.80/403.61 ms for fresh overlays and 5.16/4.30/4.00 ms repeated-view
+medians. The warm fresh-overlay observations do not show extra delay versus
+the earlier baseline sequence; run-order and JIT effects prevent attributing
+that difference to the repair. No model inference was run during these timings.
+
+Both new public renderer regressions were observed failing before their fixes
+and passing afterward. All 14 standard cases pass, including unchanged outline,
+exterior-artwork and pending-text checks. The actual upper-left capture also
+checks all 12,151 annotated strong black/red source pixels on the cover-only
+composite. Faint remaining pixels are outside that strong-ink assertion.
+
+An 18-view baseline/candidate comparison preserves all source and translation
+arrays and introduces no caption losses, new margins or new strict failures.
+The 16 Senmanga views retain six strict passes and ten existing failures.
+Comic Days and Tameshiyo retain their existing missing-caption failures at
+regions 4 and 15 respectively. Senmanga view 32 region 3 moves from margin18
+to local17 DIP, its remaining margin rows move up, and view 39 region 8 grows
+from local15 to local18 DIP. These five placement changes are recorded in
+`.cache/replay/senmanga-acceptance/live-union-final-comparison/comparison.json`.
+
+Private evidence is under `.cache/live-qa/region0-search/` and
+`.cache/replay/live-upper-cover/`. Original manga images and derivatives remain
+local. The complete chapter still has documented detection and recognition
+losses; no v0.2.0 release acceptance is claimed.
+
+The combined Release publish and complete session lifecycle suite pass. The
+rebuilt app's live visual check remains pending: after the tests, Computer Use
+again showed terminal windows over Comet. Automatic approval review rejected
+capturing that overlap, and the Computer Use skill prohibits operating the
+terminals. The reader was asked to clear them; saved-view work continued.

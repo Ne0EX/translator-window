@@ -182,6 +182,41 @@ internal static class Program
             }
             if (fixture.Background == "bubble")
             {
+                var largeBubble = fixture with { Id = "large-capture-closed-bubble", Background = "private",
+                    Width = 1800, Height = 1200, Dpi = 144,
+                    Regions = new[] { fixture.Regions[0] with { Bounds = new Box(875, 355, 150, 622),
+                        Translation = "ฉันจะใช้ทุกสิ่งที่สามารถใช้ได้เพื่อช่วยเหลือ ไม่ว่าจะยากแค่ไหนก็ตาม!" } },
+                    TextContainers = new[] { new ContainerFixture(fixture.Regions[0].Id, new Box(800, 250, 300, 820), true) },
+                    ProtectedArtwork = Array.Empty<ProtectedFixture>() };
+                var largePixels = new byte[largeBubble.Width * largeBubble.Height * 4];
+                Paint(largePixels, largeBubble.Width, largeBubble.Height,
+                    new Drawing.Rectangle(0, 0, largeBubble.Width, largeBubble.Height), (x, y) => {
+                        double radius = Math.Pow((x - 950d) / 150, 2) + Math.Pow((y - 660d) / 410, 2);
+                        return radius > 1 ? ((byte)90, (byte)120, (byte)150)
+                            : radius >= 0.97 ? ((byte)18, (byte)18, (byte)18)
+                            : ((byte)248, (byte)248, (byte)248);
+                    });
+                for (int y = 370; y < 970; y += 50)
+                foreach (int x in new[] { 916, 970 })
+                    Paint(largePixels, largeBubble.Width, largeBubble.Height, new Drawing.Rectangle(x, y, 4, 13),
+                        (_, _) => ((byte)18, (byte)18, (byte)18));
+                Paint(largePixels, largeBubble.Width, largeBubble.Height, new Drawing.Rectangle(948, 286, 4, 13),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                var largeFrame = BitmapSource.Create(largeBubble.Width, largeBubble.Height, largeBubble.Dpi, largeBubble.Dpi,
+                    PixelFormats.Bgra32, null, largePixels, largeBubble.Width * 4);
+                largeFrame.Freeze();
+                var largeResult = Replay(largeBubble, largeFrame);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics, largeBubble, largeFrame, largeResult, "fixed-text");
+                var largeRendered = Pixels(largeResult.Rendered);
+                Require(largeRendered[(290 * largeBubble.Width + 949) * 4] == 255,
+                    "A large captured view must still cover source lettering throughout its closed bubble.");
+                Verify(largeBubble, largeResult);
+                for (int y = 0; y < largeBubble.Height; y++)
+                for (int x = 0; x < largeBubble.Width; x++)
+                    if (Math.Pow((x - 950d) / 150, 2) + Math.Pow((y - 660d) / 410, 2) >= 0.97)
+                        Require(largePixels.AsSpan((y * largeBubble.Width + x) * 4, 4)
+                            .SequenceEqual(largeRendered.AsSpan((y * largeBubble.Width + x) * 4, 4)),
+                            "Bounded bubble search must preserve every outline and exterior artwork pixel.");
                 Require(first.Items.Single(item => item.Kind == "caption").FontSize >= 28,
                     "A roomy bubble must use a larger readable caption instead of the fixed 24-DIP ceiling.");
                 var cornerNeighbor = fixture with { Regions = fixture.Regions.Concat(new[] {
@@ -295,6 +330,32 @@ internal static class Program
                         Require(highlightedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(highlightedRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Crossing an interior highlight must preserve the closed bubble outline and exterior artwork.");
+                var exposedInkPixels = Pixels(frame);
+                for (int y = 105; y < 300; y++)
+                for (int x = 220; x < 375; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) < 0.94
+                        && exposedInkPixels[(y * fixture.Width + x) * 4] == 248)
+                        Set(exposedInkPixels, fixture.Width, x, y, 238, 237, 242);
+                Paint(exposedInkPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(220, 184, 106, 10),
+                    (x, y) => Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) < 0.94
+                        && exposedInkPixels[(y * fixture.Width + x) * 4] != 18
+                        ? ((byte)255, (byte)255, (byte)255)
+                        : (exposedInkPixels[(y * fixture.Width + x) * 4 + 2],
+                            exposedInkPixels[(y * fixture.Width + x) * 4 + 1], exposedInkPixels[(y * fixture.Width + x) * 4]));
+                var exposedInkFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, exposedInkPixels, fixture.Width * 4);
+                exposedInkFrame.Freeze();
+                var exposedInkFixture = fixture with { Background = "source-ink-beside-highlight",
+                    WhiteSourceCoverPoints = new[] { new Box(265, 165, 1, 1), new Box(297, 221, 1, 1) } };
+                var exposedInkResult = Replay(exposedInkFixture, exposedInkFrame);
+                Verify(exposedInkFixture, exposedInkResult);
+                var exposedInkRendered = Pixels(exposedInkResult.Rendered);
+                for (int y = 0; y < fixture.Height; y++)
+                for (int x = 0; x < fixture.Width; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                        Require(exposedInkPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(exposedInkRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Covering lettering beside a pale highlight must preserve the outline and exterior artwork.");
                 var tintedPixels = Pixels(frame);
                 for (int y = 105; y < 300; y++)
                 for (int x = 220; x < 375; x++)
@@ -784,17 +845,23 @@ internal static class Program
                 Require(visuals.Where(border => border.Child is TextBlock).All(border => canvas.Children.Contains(border)),
                     $"{fixture.Id}: unchanged headings must reuse their visuals.");
             }
-            if (fixture.SourceInkPoints is { } points)
+            if (fixture.SourceInkPoints is not null || fixture.WhiteSourceCoverPoints is not null)
             {
                 var coverIndices = Enumerable.Range(0, items.Length).Where(i => items[i].Kind == "cover").ToArray();
                 var covered = Pixels(RenderCapturedView(frame, coverIndices.Select(i => visuals[i]).ToArray(),
                     coverIndices.Select(i => items[i]).ToArray(), fixture.Width, fixture.Height));
-                foreach (var point in points)
+                foreach (var point in fixture.SourceInkPoints ?? Array.Empty<Box>())
                     Require(!(covered[(point.Y * fixture.Width + point.X) * 4 + 1] > 175
                         && covered[(point.Y * fixture.Width + point.X) * 4 + 1]
                             > covered[(point.Y * fixture.Width + point.X) * 4] + 60),
                         $"{fixture.Id}: original heading ink remains at {point.X},{point.Y} before drawing Thai: "
                         + string.Join(",", covered.Skip((point.Y * fixture.Width + point.X) * 4).Take(4)));
+                foreach (var point in fixture.WhiteSourceCoverPoints ?? Array.Empty<Box>())
+                {
+                    int pixel = (point.Y * fixture.Width + point.X) * 4;
+                    Require(covered[pixel] == 255 && covered[pixel + 1] == 255 && covered[pixel + 2] == 255,
+                        $"{fixture.Id}: original bubble lettering remains at {point.X},{point.Y} before drawing captions.");
+                }
             }
             var rendered = RenderCapturedView(frame, visuals, items, fixture.Width, fixture.Height);
             if (fixture.Background == "bubble" && !allowMissing)
@@ -1165,7 +1232,7 @@ internal static class Program
         ContainerFixture[] TextContainers, ProtectedFixture[] ProtectedArtwork, PassageFixture[] IntendedPassages,
         bool ExpectMarginCaption = false, bool ExpectColoredCaption = false, Box[]? DetectedRegions = null,
         string? CapturedView = null, bool AutoStyle = false, string[]? LocalHeadings = null,
-        Box[]? SourceInkPoints = null)
+        Box[]? SourceInkPoints = null, Box[]? WhiteSourceCoverPoints = null)
     {
         public int SchemaVersion => 1;
     }

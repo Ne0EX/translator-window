@@ -33,6 +33,29 @@ public sealed class SourceCoverPlan
     internal bool Covers(int x, int y) => PermittedArea.Contains(x, y)
         && mask[(y - PermittedArea.Top) * PermittedArea.Width + x - PermittedArea.Left];
 
+    internal SourceCoverPlan IncludeFootprint(SourceCoverPlan footprint, Rectangle source,
+        Action<int> sampleRow, CancellationToken cancellationToken)
+    {
+        var overlap = Rectangle.Intersect(source, Rectangle.Intersect(FootprintBounds, footprint.FootprintBounds));
+        bool[]? combined = null;
+        int covered = CoveredPixelCount;
+        for (int y = overlap.Top; y < overlap.Bottom; y++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sampleRow(overlap.Width);
+            for (int x = overlap.Left; x < overlap.Right; x++)
+            {
+                if (Covers(x, y) || !footprint.Covers(x, y)) continue;
+                combined ??= (bool[])mask.Clone();
+                combined[(y - PermittedArea.Top) * PermittedArea.Width + x - PermittedArea.Left] = true;
+                covered++;
+            }
+        }
+        // Keep the closed bubble's reconstruction and contour bounds; only repair independently qualified source lettering.
+        return combined is null ? this : new SourceCoverPlan(Classification, image, PermittedArea,
+            FootprintBounds, combined, reconstruction, covered);
+    }
+
     internal SourceCoverPlan? Excluding(IReadOnlyList<Rectangle> areas, Action<int> sampleRow,
         CancellationToken cancellationToken)
     {

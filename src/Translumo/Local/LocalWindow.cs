@@ -198,7 +198,8 @@ public sealed class LocalWindow : Window
             nint overlayWindow = new WindowInteropHelper(overlay).EnsureHandle();
             using var navigation = new NavigationInputObserver(windowSource, getBounds, selectedWindow,
                 new WindowInteropHelper(this).Handle, overlayWindow);
-            var session = new LiveTranslationSession(translator, overlay, text => status.Text = text, ocr, navigation);
+            var session = new LiveTranslationSession(translator, overlay, text => status.Text = text, ocr, navigation,
+                Path.Combine(root, ".cache", "live-qa"));
             await session.RunAsync(getBounds, sourceCode, (string)target.SelectedValue,
                 style.SelectedIndex == 0 ? SubtitleStyle.Overlay : SubtitleStyle.Overwrite, (int)padding.Value,
                 cancellation.Token, hideOriginals, SelectedCaptionStyle);

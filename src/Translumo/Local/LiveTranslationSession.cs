@@ -4,12 +4,17 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Controls;
 using System.Windows.Media.Imaging;
+using Media = System.Windows.Media;
 
 namespace Translumo.Local;
 
@@ -21,15 +26,16 @@ public sealed class LiveTranslationSession
     private readonly SubtitleOverlay _overlay;
     private readonly Action<string> _status;
     private readonly NavigationInputObserver? _navigation;
+    private readonly string? _diagnosticsDirectory;
     private int _version;
 
     public LiveTranslationSession(LocalTranslator translator, SubtitleOverlay overlay, Action<string> status, SpatialOcr? ocr = null)
         : this(translator, overlay, status, ocr, null) { }
 
     internal LiveTranslationSession(LocalTranslator translator, SubtitleOverlay overlay, Action<string> status,
-        SpatialOcr? ocr, NavigationInputObserver? navigation)
-        => (_translator, _overlay, _status, _ocr, _navigation)
-            = (translator, overlay, status, ocr ?? new SpatialOcr(), navigation);
+        SpatialOcr? ocr, NavigationInputObserver? navigation, string? diagnosticsDirectory = null)
+        => (_translator, _overlay, _status, _ocr, _navigation, _diagnosticsDirectory)
+            = (translator, overlay, status, ocr ?? new SpatialOcr(), navigation, diagnosticsDirectory);
 
     public async Task RunAsync(Func<Rectangle?> getBounds, string source, string target,
         SubtitleStyle style, int padding, CancellationToken token, bool hideOriginals = false,
@@ -234,6 +240,7 @@ public sealed class LiveTranslationSession
                                         allowMissingTranslations: stableTranslation is null, captionStyle: captionProfile,
                                         cancellationToken: token);
                                     _overlay.ConfirmRender();
+                                    TryWriteLiveEvidence(held, _version, "restored", token);
                                     int translated = held.Translations.Count(value => !string.IsNullOrWhiteSpace(value));
                                     _status($"Captions restored after scrolling · {translated} translated blocks.");
                                 }
@@ -346,6 +353,7 @@ public sealed class LiveTranslationSession
                                             captionStyle: captionProfile, cancellationToken: token);
                                     layoutTimer.Stop();
                                     _overlay.ConfirmRender();
+                                    TryWriteLiveEvidence(result, _version, "complete", token);
                                     stableRegions = result.RegionFingerprints;
                                     stableTranslation = result;
                                     recognizedFrame = null;
@@ -442,6 +450,106 @@ public sealed class LiveTranslationSession
                     finally { _ocr.Dispose(); }
                 }
             }
+        }
+    }
+
+    private void TryWriteLiveEvidence(TranslatedFrame accepted, int generation, string phase, CancellationToken token)
+    {
+        if (_diagnosticsDirectory is null) return;
+        try
+        {
+            string request = Path.Combine(_diagnosticsDirectory, "request");
+            if (!File.Exists(request) || token.IsCancellationRequested || generation != _version
+                || _navigation?.IsActive == true || !_overlay.IsVisible || accepted.Frame is not { } frame) return;
+            _overlay.Dispatcher.VerifyAccess();
+            var canvas = (Canvas)_overlay.Content;
+            var desktop = System.Windows.Forms.SystemInformation.VirtualScreen;
+            var capture = accepted.Bounds;
+            // ponytail: one requested snapshot of the accepted live visuals; never instrument every layout.
+            const long maximumPixels = 16_000_000;
+            if (canvas.Children.Count == 0 || (long)desktop.Width * desktop.Height > maximumPixels
+                || (long)capture.Width * capture.Height > maximumPixels
+                || frame.PixelWidth != capture.Width || frame.PixelHeight != capture.Height) return;
+            _overlay.UpdateLayout();
+            if (token.IsCancellationRequested || generation != _version || _navigation?.IsActive == true
+                || !_overlay.IsVisible) return;
+            var transform = System.Windows.PresentationSource.FromVisual(_overlay)?.CompositionTarget?.TransformFromDevice
+                ?? throw new InvalidOperationException("The live caption display transform is unavailable.");
+            double scaleX = transform.M11, scaleY = transform.M22;
+            if (!double.IsFinite(scaleX) || !double.IsFinite(scaleY) || scaleX <= 0 || scaleY <= 0) return;
+            var layer = new RenderTargetBitmap(desktop.Width, desktop.Height, 96 / scaleX, 96 / scaleY,
+                Media.PixelFormats.Pbgra32);
+            layer.Render(canvas); // Includes the actual parent clip, including the app-controls exclusion.
+            layer.Freeze();
+            var compositeDrawing = new Media.DrawingVisual();
+            using (var drawing = compositeDrawing.RenderOpen())
+            {
+                drawing.DrawImage(frame, new System.Windows.Rect(0, 0, capture.Width, capture.Height));
+                drawing.DrawImage(layer, new System.Windows.Rect(desktop.X - capture.X, desktop.Y - capture.Y,
+                    desktop.Width, desktop.Height));
+            }
+            var composite = new RenderTargetBitmap(capture.Width, capture.Height, 96, 96, Media.PixelFormats.Pbgra32);
+            composite.Render(compositeDrawing);
+            composite.Freeze();
+            if (token.IsCancellationRequested || generation != _version || _navigation?.IsActive == true) return;
+            string id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff", System.Globalization.CultureInfo.InvariantCulture)
+                + "-" + Guid.NewGuid().ToString("N")[..8];
+            string prefix = Path.Combine(_diagnosticsDirectory, id);
+            Save(frame, prefix + ".source.png");
+            Save(layer, prefix + ".layer.png");
+            Save(composite, prefix + ".rendered.png");
+            using var sourceFile = File.OpenRead(prefix + ".source.png");
+            var assembly = typeof(LiveTranslationSession).Assembly;
+            var borders = canvas.Children.OfType<Border>().ToArray();
+            var report = new {
+                schemaVersion = 1, id, capturedUtc = DateTime.UtcNow, phase, acceptedGeneration = generation,
+                sourceGeneration = accepted.Version,
+                assemblyInformationalVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+                assemblyModuleVersionId = assembly.ManifestModule.ModuleVersionId,
+                source = id + ".source.png", layer = id + ".layer.png", rendered = id + ".rendered.png",
+                sourceSha256 = Convert.ToHexString(SHA256.HashData(sourceFile)),
+                captureBounds = new[] { capture.X, capture.Y, capture.Width, capture.Height },
+                virtualScreen = new[] { desktop.X, desktop.Y, desktop.Width, desktop.Height },
+                dpi = new[] { 96 / scaleX, 96 / scaleY },
+                transformFromDevice = new[] { transform.M11, transform.M12, transform.M21, transform.M22, transform.OffsetX, transform.OffsetY },
+                overlayVisible = _overlay.IsVisible, overlayOpacity = _overlay.Opacity,
+                canvasClip = canvas.Clip?.GetFlattenedPathGeometry().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                regions = accepted.Regions.Select((region, index) => new {
+                    id = index.ToString(), bounds = new[] { region.Bounds.X, region.Bounds.Y, region.Bounds.Width, region.Bounds.Height },
+                    recognizedText = region.Text, translation = accepted.Translations[index]
+                }).ToArray(),
+                captions = borders.Select(border => {
+                    var text = border.Child as TextBlock;
+                    int index = border.Tag is int value ? value : -1;
+                    return new {
+                        kind = border.Uid == "association-badge" ? "association-badge" : text is null ? "cover" : "caption",
+                        regionId = index >= 0 && index < accepted.Regions.Count ? index.ToString() : null, uid = border.Uid,
+                        bounds = new[] { (int)Math.Round(Canvas.GetLeft(border) / scaleX) + desktop.X - capture.X,
+                            (int)Math.Round(Canvas.GetTop(border) / scaleY) + desktop.Y - capture.Y,
+                            (int)Math.Round(border.Width / scaleX), (int)Math.Round(border.Height / scaleY) },
+                        text = text?.Text, typeface = text?.FontFamily.Source, fontSize = text?.FontSize,
+                        fontWeight = text?.FontWeight.ToString(),
+                        fallbackReason = text is not null && border.Uid != "association-badge"
+                            && borders.Any(other => other.Uid == "association-badge" && Equals(other.Tag, border.Tag))
+                            ? "readable-margin" : null
+                    };
+                }).ToArray()
+            };
+            File.WriteAllText(prefix + ".json", JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+            File.Delete(request);
+        }
+        catch (Exception error)
+        {
+            // Optional diagnostics must never end translation or consume a failed request.
+            Debug.WriteLine("Live caption evidence was not saved: " + error.Message);
+        }
+
+        static void Save(BitmapSource image, string path)
+        {
+            using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(image));
+            encoder.Save(file);
         }
     }
 

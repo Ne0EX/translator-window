@@ -1198,11 +1198,29 @@ public sealed class SubtitleOverlay : Window
             var localMask = mask;
             localSource.Offset(-capture.X, -capture.Y);
             localMask.Offset(-capture.X, -capture.Y);
-            var search = localSource;
-            search.Inflate(Math.Max(96, Math.Max(localSource.Width, localSource.Height)), Math.Max(96, localSource.Height));
-            search.Intersect(new Drawing.Rectangle(0, 0, capture.Width, capture.Height));
+            int searchX = Math.Max(96, Math.Max(localSource.Width, localSource.Height));
+            int searchY = Math.Max(96, localSource.Height);
+            Drawing.Rectangle search;
+            do
+            {
+                search = localSource;
+                search.Inflate(searchX, searchY);
+                search.Intersect(new Drawing.Rectangle(0, 0, capture.Width, capture.Height));
+                if (SourceCover.IsWithinBudget(search) || searchX == 0 && searchY == 0) break;
+                // Keep the detected text intact while reducing oversized search padding, not the flood budget.
+                searchX /= 2;
+                searchY /= 2;
+            } while (true);
             var plan = display?.Cover ?? SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
                 localSource, search, workBudget.TryBubble, cancellationToken);
+            if (display is null && plan is not null)
+            {
+                workBudget.SampleBackgroundRow(checked(localMask.Width * localMask.Height));
+                var footprint = SourceCover.TryCreate(pixels, capture.Width, capture.Height, capture.Width * 4,
+                    localSource, localMask, cancellationToken);
+                if (footprint is not null)
+                    plan = plan.IncludeFootprint(footprint, localSource, workBudget.SampleBackgroundRow, cancellationToken);
+            }
             if (plan is not null)
             {
                 var bubble = plan.FootprintBounds;
@@ -1286,6 +1304,7 @@ public sealed class SubtitleOverlay : Window
         text.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         int lineHeight = Math.Max(1, (int)Math.Ceiling(text.DesiredSize.Height / scaleY));
         var typeface = new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch);
+        var strips = new Dictionary<int, (double Width, double Center)>();
         // Each line uses a contiguous strip contained by the contour throughout its full height.
         for (int count = 1; count <= Math.Min(16, (bubble.Height - 4) / lineHeight); count++)
         {
@@ -1296,9 +1315,17 @@ public sealed class SubtitleOverlay : Window
             var centers = new double[count];
             for (int line = 0; line < count; line++)
             {
+                int rowTop = top + line * lineHeight;
+                // Row-count candidates revisit the same strips; line height and the cover are fixed for this call.
+                if (strips.TryGetValue(rowTop, out var strip))
+                {
+                    available[line] = strip.Width;
+                    centers[line] = strip.Center;
+                    continue;
+                }
                 var common = new bool[bubble.Width];
                 Array.Fill(common, true);
-                for (int y = top + line * lineHeight; y < top + (line + 1) * lineHeight; y++)
+                for (int y = rowTop; y < rowTop + lineHeight; y++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     budget.SampleBackgroundRow(bubble.Width);
@@ -1314,6 +1341,7 @@ public sealed class SubtitleOverlay : Window
                 }
                 available[line] = Math.Max(0, bestWidth - 4) * scaleX;
                 centers[line] = bestLeft + bestWidth / 2d;
+                strips[rowTop] = (available[line], centers[line]);
             }
             var costs = new double[count + 1, words.Length + 1];
             var breaks = new int[count, words.Length];

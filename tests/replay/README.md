@@ -28,6 +28,76 @@ The stylized fixture deliberately records one heading as
 missing passage separate from a successfully rendered body caption, rather than
 claiming support or assigning an unevidenced detector fault.
 
+## Actual live caption evidence
+
+For the approved live-reading check, the normal app can export its current
+accepted caption layer once. From the repository root, create the request before
+starting a translation session or navigating to another captured view:
+
+```powershell
+New-Item -ItemType Directory -Force .cache/live-qa | Out-Null
+New-Item -ItemType File -Force .cache/live-qa/request | Out-Null
+```
+
+Use the app's normal controls to start translation and leave the source still.
+The next confirmed complete or restored caption state writes four files with a
+shared timestamp and ID: `.source.png`, `.layer.png`, `.rendered.png`, and `.json`.
+The app removes `request` only after successful output. All files remain ignored
+and local. A failed or unsupported capture keeps the request for a later attempt.
+Snapshots are limited to 16 million pixels for each capture and desktop layer.
+
+This exports the actual accepted WPF canvas, including its clip, without running
+a fresh renderer or changing screenshot exclusion. The transparent layer covers
+the virtual desktop; the composite covers only `captureBounds`. Captions outside
+those capture bounds are preserved in the layer, not in the composite. The JSON
+records the running assembly version and module ID, accepted and source
+generations, DPI and screen mapping, recognized text, translations, and caption
+associations, geometry and fonts. A restored source generation can precede its
+accepted generation.
+
+Check one specific exported report with the existing Python environment:
+
+```powershell
+.\.venv\Scripts\python.exe tests/replay/check-live-evidence.py `
+  .cache/live-qa/<snapshot-id>.json `
+  --version "<expected-running-assembly-informational-version>" `
+  --source-text "たとえどんなに攻略困難な相手でもね!"
+```
+
+Supply a source literal independently read from that captured view; repeat
+`--source-text` for other required passages. Omit it only when checking artifact
+integrity without making a source-coverage claim. `--version` checks an exact
+build version; the module ID is also printed so builds from uncommitted changes
+sharing one version can be distinguished.
+
+The script verifies the accepted source PNG hash, decodes all three PNGs, checks
+their recorded dimensions and layer transparency, and prints their SHA256 hashes.
+It checks caption associations, complete displayed translations (allowing line
+breaks and the associated margin number), recorded fonts and the 12 DIP caption
+floor. Association badges are excluded from that font floor. Available
+translations without captions are reported: browser controls may be skipped, so
+they fail this check only when required by an explicit source literal. Required
+passages must be recognized exactly and have complete translated captions.
+
+Inspect the source, layer and composite visually as well. Passing establishes
+consistency of this accepted WPF still and its recorded associations. It does not
+establish correct translation meaning, complete source coverage, compositor
+visibility, smooth navigation or absence of flicker. The one requested export
+performs image encoding and file writes; exclude that interval from performance
+measurements. Without a request, it does no PNG work.
+
+The first live run on 2026-09-28 retains three distinct outcomes under
+`.cache/live-qa/`. Snapshot `20260927-221650346-bb552234` has an empty layer while
+the maximized app controls exclude the whole desktop; the checker rejects it as
+visual evidence. Snapshot `20260927-221711708-932342df` passes with the independently
+read colored-opponent literal above and a complete local 24-DIP caption. Its
+upper-left bubble still exposes source ink and the right passage uses a margin,
+so this is target-passage evidence, not whole-view acceptance. Snapshot
+`20260927-221821178-07d44d45` records a later recognition error ending
+`目Fでラロ!`; the raw translation retains `ラロ` while the displayed caption
+filters it. The checker preserves both the exact-source and complete-caption
+failures. That mismatch is not evidence of stale source association.
+
 ## Repeated-view performance
 
 For the opt-in repeated-view rendering budget:
@@ -214,3 +284,8 @@ Private fixed-text cases may set `capturedView`, `autoStyle`, `localHeadings` an
 yellow-ink pixels checked on the cover layer before drawing translated text.
 It is a sparse coverage check, not proof that the entire lettering mask is clean.
 The three-heading reference remains local under `.cache/replay/reference-page/`.
+
+`whiteSourceCoverPoints` similarly checks independently chosen source-lettering
+pixels that should become white paper before captions are drawn. The pale-bubble
+regression also checks every outline and exterior pixel remains unchanged. These
+checks establish the annotated coverage and protection, not general segmentation.
