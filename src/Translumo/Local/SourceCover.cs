@@ -129,8 +129,9 @@ public static class SourceCover
             Visit(index - search.Width, x, y - 1); Visit(index + search.Width, x, y + 1);
         }
         var bounds = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
+        // A short utterance can occupy very little of a small closed bubble.
         if (!bounds.Contains(text) || tail < text.Width * text.Height / 2
-            || (long)bounds.Width * bounds.Height > (long)text.Width * text.Height * 8) return null;
+            || (long)bounds.Width * bounds.Height > Math.Max(96 * 96, (long)text.Width * text.Height * 8)) return null;
 
         // Flood the complement from outside: disconnected holes are lettering, the connected outline is preserved.
         var exterior = new bool[count];

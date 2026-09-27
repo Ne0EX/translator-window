@@ -424,6 +424,8 @@ public sealed class SubtitleOverlay : Window
             var permittedLocalArea = PermittedCaptionArea(source, captureBounds);
             var placementArea = sourceCovers[i] is { Plan: { Classification: SourceCoverClass.Plain } } interior
                 && interior.Bounds.Contains(source) ? interior.Bounds : source;
+            bool hasContainer = placementArea != source;
+            if (hasContainer) permittedLocalArea = placementArea;
             var appearance = CaptionAppearance(CaptionStyles.ForRegion(captionStyle, regions[i]),
                 sourceCovers[i]?.Background,
                 captionStyle.Role == CaptionRole.Auto && captionStyle.Foreground == Colors.Black
@@ -504,7 +506,7 @@ public sealed class SubtitleOverlay : Window
                             TextTrimming = TextTrimming.None
                         };
                         var cachedCaption = new Border { Tag = i, Background = cachedBackground,
-                            Padding = new Thickness(6 * scaleX, 6 * scaleY, 6 * scaleX, 6 * scaleY),
+                            Padding = previous.Caption!.Padding,
                             Child = cachedText };
                         placed.Add(previous.Bounds);
                         visuals.Add((cachedCaption, previous.Bounds));
@@ -533,11 +535,14 @@ public sealed class SubtitleOverlay : Window
                 cancellationToken.ThrowIfCancellationRequested();
                 double bestScore = double.PositiveInfinity;
                 double maxWidthDip = Math.Min(captureBounds.Width * scaleX,
-                    Math.Min(320, Math.Max(80, source.Width * scaleX * 2.5)));
+                    hasContainer ? placementArea.Width * scaleX
+                        : Math.Min(320, Math.Max(80, source.Width * scaleX * 2.5)));
                 var lineWidths = new Dictionary<string, double>();
                 foreach (double widthDip in new[] { source.Width * scaleX, (source.Width + 12) * scaleX,
                     source.Width * scaleX * 1.5, source.Width * scaleX * 2,
-                    permittedLocalArea.Width * scaleX, maxWidthDip }
+                    permittedLocalArea.Width * scaleX, maxWidthDip,
+                    hasContainer ? maxWidthDip * 0.65 : maxWidthDip,
+                    hasContainer ? maxWidthDip * 0.8 : maxWidthDip }
                     .Select(width => Math.Min(width, maxWidthDip)).Distinct().Order())
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -549,7 +554,7 @@ public sealed class SubtitleOverlay : Window
                         TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.None
                     };
                     int width = Math.Min(captureBounds.Width, (int)Math.Ceiling(widthDip / scaleX));
-                    double insetX = 6 * scaleX, insetY = 6 * scaleY;
+                    double insetX = (hasContainer ? 2 : 6) * scaleX, insetY = (hasContainer ? 2 : 6) * scaleY;
                     double contentWidth = Math.Max(1, width * scaleX - insetX * 2);
                     if (words is not null)
                     {
@@ -565,8 +570,9 @@ public sealed class SubtitleOverlay : Window
                     text.Measure(new Size(contentWidth, double.PositiveInfinity));
                     int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
                     double maxHeight = Math.Min(captureBounds.Height,
-                        Math.Max(72, source.Height * (style == SubtitleStyle.Overlay ? 2.4 : 1.8)));
-                    if (height > maxHeight || height > width * 1.6) continue;
+                        hasContainer ? placementArea.Height
+                            : Math.Max(72, source.Height * (style == SubtitleStyle.Overlay ? 2.4 : 1.8)));
+                    if (height > maxHeight || !hasContainer && height > width * 1.6) continue;
                     Brush? candidateBackground = backgroundPixels is null ? Brushes.White : null;
                     var candidatePosition = SubtitleLayout.Place(placementArea, new Drawing.Size(width, height), captureBounds,
                         blockers, style == SubtitleStyle.Overlay, 6, frame is null ? null
@@ -575,11 +581,17 @@ public sealed class SubtitleOverlay : Window
                                 if (style == SubtitleStyle.Overwrite && !permittedLocalArea.Contains(candidate))
                                     return false;
                                 if (style == SubtitleStyle.Overwrite
+                                    && !hasContainer
                                     && Math.Abs(candidate.Left + candidate.Width / 2 - (source.Left + source.Width / 2)) > Math.Max(32, source.Width / 2))
                                     return false;
                                 candidateBackground = BackgroundBrush(candidate, cover, captureBounds, backgroundPixels,
                                     frame, style, sourceCovers[i]?.Caption, sourceCovers[i]?.Bounds,
                                     sourceCovers[i]?.Background, workBudget, cancellationToken, sourceCovers[i]?.Plan);
+                                if (candidateBackground is null && hasContainer && thai
+                                    && sourceCovers[i]?.Plan is { } containerPlan
+                                    && LinesFitCover(text, candidate, captureBounds, containerPlan,
+                                        scaleX, scaleY, insetY, workBudget, cancellationToken))
+                                    candidateBackground = Brushes.Transparent;
                                 return candidateBackground is not null;
                             });
                     if (candidatePosition is null && style == SubtitleStyle.Overwrite && backgroundPixels is not null)
@@ -1215,6 +1227,34 @@ public sealed class SubtitleOverlay : Window
             bounds.Offset(capture.Location);
             return (patchBrush, bounds, Brushes.Transparent, background, plan);
         }
+    }
+
+    private static bool LinesFitCover(TextBlock text, Drawing.Rectangle bounds, Drawing.Rectangle capture,
+        SourceCoverPlan plan, double scaleX, double scaleY, double insetY,
+        RenderWorkBudget workBudget, CancellationToken cancellationToken)
+    {
+        // A bubble's rounded corners need not contain the empty corners of a centered text block.
+        var lines = text.Text.Replace("\r", "").Split('\n');
+        double lineHeight = text.DesiredSize.Height / lines.Length;
+        var typeface = new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch);
+        for (int line = 0; line < lines.Length; line++)
+        {
+            var measured = new FormattedText(lines[line], text.Language.GetEquivalentCulture(),
+                text.FlowDirection, typeface, text.FontSize, text.Foreground,
+                VisualTreeHelper.GetDpi(text).PixelsPerDip);
+            int width = (int)Math.Ceiling(measured.WidthIncludingTrailingWhitespace / scaleX) + 2;
+            int left = bounds.Left + (bounds.Width - width) / 2;
+            int top = bounds.Top + (int)Math.Floor((insetY + line * lineHeight) / scaleY);
+            int bottom = bounds.Top + (int)Math.Ceiling((insetY + (line + 1) * lineHeight) / scaleY);
+            for (int y = top; y < bottom; y++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                workBudget.SampleBackgroundRow(width);
+                for (int x = left; x < left + width; x++)
+                    if (!plan.Covers(x - capture.X, y - capture.Y)) return false;
+            }
+        }
+        return true;
     }
 
     internal static Drawing.Rectangle PermittedCaptionArea(Drawing.Rectangle source, Drawing.Rectangle capture)

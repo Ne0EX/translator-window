@@ -275,3 +275,42 @@ The existing 12-DIP minimum was retained; dense-view margin text is still smalle
 than desired. Prioritize more local bubble placement, complete source coverage,
 badge readability and cold-layout cost before release. Preserve current translation
 speed and obtain matched live scrolling/page-turn evidence for the final build.
+
+## Prefer local bubble placement — 2026-09-27 follow-up
+
+Reader feedback rejected excessive margin captions. Qualified plain containers
+now supply fitting width/height and compact 2-pixel padding. For rounded bubbles,
+each centered text line may fit the filled mask even when the empty corners of
+the overall text rectangle do not. The fallback checks every line rectangle
+against the qualified cover; it does not authorize painting text across artwork.
+Short source utterances may now qualify closed bubbles up to 9,216 pixels in area
+without failing the existing eight-times-source-area limit. Other flood, ink,
+component and pending-passage checks remain in effect. Cached captions retain
+their chosen padding. The 12-DIP floor and translation pipeline are unchanged.
+
+The initial long-text bubble case failed with a space exception. After narrowing
+the regression to a fitting example, its final long-text case still fails against
+the saved checkpoint DLL and passes against the candidate. An isolated Comic Days
+short utterance also failed annotated bubble containment before the small-bubble
+qualification change and passes afterward. All 14 standard renderer fixtures and
+the layout/session lifecycle suite pass. Existing exterior-pixel and pending-text
+checks remain intact.
+
+With the same fixed translations and source captures, matching local captions
+increase from 1 to 6 on Comic Days (five manga captions recovered; the existing
+local browser label is included in both counts), and from 0 to 1 on Tameshiyo.
+Matching margin captions decrease from 16 to 11 and 18 to 17 respectively.
+Senmanga's eight-region capture remains four local/four margin captions. Strict
+full-text verification still flags the previously documented Japanese-output
+sanitization mismatches; these counts exclude mismatching output and do not
+establish translation accuracy. Private composites are in `.cache/replay/local-placement`.
+
+Repeated-view medians: Comic Days 4.06 ms, Tameshiyo 5.34 ms, Senmanga 2.60 ms.
+New first-layout instrumentation records 2,227 / 3,008 / 1,007 ms respectively,
+including first-use renderer work. A checkpoint Comic Days run measured 2,691 ms
+first layout and 8.41 ms repeated median, but these isolated runs are noisy and
+do not establish a live latency improvement. The extra line-mask fitting runs
+only during layout search; unchanged frames reuse visuals. First layout remains
+too expensive to call optimized. No extra model calls or VRAM model allocations
+were added. Small, long-word and complex/open containers still use margins;
+the reader's request for predominantly local captions is not fully satisfied.

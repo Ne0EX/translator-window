@@ -92,6 +92,11 @@ internal static class Program
             }
             if (fixture.Background == "bubble")
             {
+                var narrowDetection = fixture with { Regions = new[] {
+                    fixture.Regions[0] with { Bounds = new Box(282, 143, 32, 120),
+                        Translation = "ฉันจะใช้ความสามารถทั้งหมดที่มี เพื่อทำให้ความปรารถนาของฉันเป็นจริง" } } };
+                var narrowResult = Replay(narrowDetection, BuildFrame(narrowDetection));
+                Verify(narrowDetection, narrowResult);
                 var inkAtSeed = Pixels(frame);
                 Paint(inkAtSeed, fixture.Width, fixture.Height, new Drawing.Rectangle(255, 197, 4, 12),
                     (_, _) => ((byte)18, (byte)18, (byte)18));
@@ -239,12 +244,15 @@ internal static class Program
                 && fixture.TargetLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase);
             var captionStyle = fixture.AutoStyle || fixture.Background == "colored-ink"
                 ? CaptionStyles.ResolveInstalled(new CaptionStyleOptions(CaptionRole.Auto)) : null;
+            var firstRender = Stopwatch.StartNew();
             overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
                 SubtitleStyle.Overwrite, 6, frame, japaneseToThai, allowMissingTranslations: allowMissing,
                 captionStyle: captionStyle);
             overlay.UpdateLayout();
+            firstRender.Stop();
             if (performance)
             {
+                Console.WriteLine($"TIMING {fixture.Id}: first layout={firstRender.Elapsed.TotalMilliseconds:F2} ms.");
                 var translations = fixture.Regions.Select(region => region.Translation).ToArray();
                 var elapsed = new double[9];
                 for (int iteration = 0; iteration < elapsed.Length; iteration++)
@@ -478,17 +486,22 @@ internal static class Program
         foreach (var area in fixture.ProtectedArtwork)
             Paint(pixels, fixture.Width, fixture.Height, area.Bounds.Drawing, (x, y) =>
                 (x / 5 + y / 5) % 2 == 0 ? ((byte)25, (byte)65, (byte)105) : ((byte)210, (byte)160, (byte)40));
-        if (fixture.Background == "bubble")
+        if (fixture.Background is "bubble" or "small-bubble")
         {
-            Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(220, 105, 155, 195), (x, y) => {
-                double radius = Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2);
+            var bubble = fixture.TextContainers[0].Bounds.Drawing;
+            Paint(pixels, fixture.Width, fixture.Height, bubble, (x, y) => {
+                double radius = Math.Pow((x - bubble.Left - bubble.Width / 2d) / (bubble.Width / 2d), 2)
+                    + Math.Pow((y - bubble.Top - bubble.Height / 2d) / (bubble.Height / 2d), 2);
                 return radius >= 0.94 && radius <= 1 ? ((byte)18, (byte)18, (byte)18)
                     : ((byte)248, (byte)248, (byte)248);
             });
-            Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(291, 123, 4, 12),
-                (_, _) => ((byte)18, (byte)18, (byte)18));
-            Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(291, 272, 4, 12),
-                (_, _) => ((byte)223, (byte)223, (byte)223));
+            if (fixture.Background == "bubble")
+            {
+                Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(291, 123, 4, 12),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                Paint(pixels, fixture.Width, fixture.Height, new Drawing.Rectangle(291, 272, 4, 12),
+                    (_, _) => ((byte)223, (byte)223, (byte)223));
+            }
         }
         foreach (var region in fixture.Regions)
         {

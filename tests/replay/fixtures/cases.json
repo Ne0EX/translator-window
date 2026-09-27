@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "cases": [
     {
+      "id":"short-text-in-small-bubble", "defectClass":"unnecessary-margin",
+      "width":600, "height":420, "dpi":96, "zoom":1,
+      "sourceLanguage":"ja", "targetLanguage":"th", "background":"small-bubble",
+      "regions":[{"id":"short","bounds":[292,194,12,22],"recognizedText":"ほら","translation":"ดูสิ"}],
+      "textContainers":[{"regionId":"short","bounds":[260,160,75,95],"requireCaptionInside":true}],
+      "protectedArtwork":[{"id":"face","bounds":[350,160,80,95]}],
+      "intendedPassages":[]
+    },
+    {
       "id": "navigation-gutters", "defectClass": "page-arrow-margin",
       "width": 1000, "height": 701, "dpi": 96, "zoom": 1,
       "sourceLanguage": "ja", "targetLanguage": "th", "background": "navigation-gutters",
