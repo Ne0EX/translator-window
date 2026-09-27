@@ -17,6 +17,22 @@ The stylized fixture deliberately records one heading as
 missing passage separate from a successfully rendered body caption, rather than
 claiming support or assigning an unevidenced detector fault.
 
+## Repeated-view performance
+
+For the opt-in repeated-view rendering budget:
+
+```powershell
+.\.tools\dotnet\dotnet.exe run --project tests\replay\ReplayCheck.csproj -c Release -- --performance
+```
+
+Each case renders nine newly allocated, frozen copies of the same captured view
+through public `SubtitleOverlay.Render`, including WPF layout. The median must
+fit 16.67 ms, one 60 Hz frame; worst time is also printed. This is a development
+machine target, not a hardware-independent CI requirement. Existing assertions
+compare the final geometry, full caption text and pixels with a fresh render.
+Capture, OCR, translation and compositor presentation are outside this timer;
+passing does not establish smooth live scrolling in Comet.
+
 ## Opt-in diagnostics
 
 Normal runs write no files. Pass a directory to record the generated captured

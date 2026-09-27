@@ -58,7 +58,7 @@ public sealed class SubtitleOverlay : Window
     private UIElement[]? rollbackChildren;
     private BitmapSource? layoutFrame;
     private byte[]? layoutPixels;
-    private readonly Dictionary<(string Text, double Size, double Width), string?> wrappedCache = new();
+    private readonly Dictionary<(string Text, double Size, double Width, string Typeface, FontWeight Weight), string?> wrappedCache = new();
     private BitmapSource? maskFrame;
     private Drawing.Rectangle maskCapture;
     private readonly Dictionary<Drawing.Rectangle, Brush> maskCache = new();
@@ -460,7 +460,7 @@ public sealed class SubtitleOverlay : Window
                     double contentWidth = Math.Max(1, width * scaleX - insetX * 2);
                     if (words is not null)
                     {
-                        var key = (translation, fontSize, contentWidth);
+                        var key = (translation, fontSize, contentWidth, appearance.Font.Source, appearance.Weight);
                         if (!wrappedCache.TryGetValue(key, out string? wrapped))
                         {
                             wrapped = WrapWords(text, words, contentWidth, lineWidths, cancellationToken) ? text.Text : null;
@@ -708,8 +708,15 @@ public sealed class SubtitleOverlay : Window
                 };
                 double insetX = 6 * scaleX, insetY = scaleY;
                 double contentWidth = margin.Width * scaleX - insetX * 2;
-                if (!WrapWords(text, ThaiWords(translation), contentWidth,
-                        cancellationToken: cancellationToken)) { fits = false; break; }
+                var key = (translation, fontSize, contentWidth, appearance.Font.Source, appearance.Weight);
+                if (!wrappedCache.TryGetValue(key, out string? wrapped))
+                {
+                    wrapped = WrapWords(text, ThaiWords(translation), contentWidth,
+                        cancellationToken: cancellationToken) ? text.Text : null;
+                    wrappedCache[key] = wrapped;
+                }
+                if (wrapped is null) { fits = false; break; }
+                text.Text = wrapped;
                 text.Measure(new Size(contentWidth, double.PositiveInfinity));
                 int height = (int)Math.Ceiling((text.DesiredSize.Height + insetY * 2) / scaleY);
                 if (tops[column] + height > margin.Bottom) { fits = false; break; }

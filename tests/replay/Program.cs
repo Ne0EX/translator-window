@@ -42,7 +42,7 @@ internal static class Program
                     Value(args, "--diagnostics"));
             else
                 RunFixed(Value(args, "--fixtures") ?? Path.Combine(AppContext.BaseDirectory, "fixtures", "cases.json"),
-                    Value(args, "--diagnostics"));
+                    Value(args, "--diagnostics"), args.Contains("--performance"));
             return 0;
         }
         catch (Exception error)
@@ -52,14 +52,14 @@ internal static class Program
         }
     }
 
-    private static void RunFixed(string fixturePath, string? diagnostics)
+    private static void RunFixed(string fixturePath, string? diagnostics, bool performance)
     {
         var suite = Read<ReplaySuite>(fixturePath);
         Require(suite.SchemaVersion == 1 && suite.Cases.Length > 0, "Replay fixture schema is unsupported or empty.");
         foreach (var fixture in suite.Cases)
         {
             BitmapSource frame = BuildFrame(fixture);
-            var first = Replay(fixture, frame);
+            var first = Replay(fixture, frame, performance);
             var second = Replay(fixture, frame);
             Require(JsonSerializer.Serialize(first.Items) == JsonSerializer.Serialize(second.Items),
                 $"{fixture.Id}: repeated geometry, lines, font or color differed.");
@@ -163,7 +163,7 @@ internal static class Program
         }, _jsonOptions));
     }
 
-    private static ReplayResult Replay(ReplayCase fixture, BitmapSource frame)
+    private static ReplayResult Replay(ReplayCase fixture, BitmapSource frame, bool performance = false)
     {
         var screen = Forms.Screen.PrimaryScreen?.Bounds ?? throw new InvalidOperationException("No primary display is available.");
         Require(fixture.Width <= screen.Width && fixture.Height <= screen.Height,
@@ -173,10 +173,30 @@ internal static class Program
         var overlay = new SubtitleOverlay();
         try
         {
+            bool japaneseToThai = fixture.SourceLanguage.StartsWith("ja", StringComparison.OrdinalIgnoreCase)
+                && fixture.TargetLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase);
             overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
-                SubtitleStyle.Overwrite, 6, frame, fixture.SourceLanguage.StartsWith("ja", StringComparison.OrdinalIgnoreCase)
-                    && fixture.TargetLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase));
+                SubtitleStyle.Overwrite, 6, frame, japaneseToThai);
             overlay.UpdateLayout();
+            if (performance)
+            {
+                var translations = fixture.Regions.Select(region => region.Translation).ToArray();
+                var elapsed = new double[9];
+                for (int iteration = 0; iteration < elapsed.Length; iteration++)
+                {
+                    var nextFrame = frame.Clone();
+                    nextFrame.Freeze();
+                    var watch = Stopwatch.StartNew();
+                    overlay.Render(capture, regions, translations, SubtitleStyle.Overwrite, 6, nextFrame,
+                        japaneseToThai);
+                    overlay.UpdateLayout();
+                    elapsed[iteration] = watch.Elapsed.TotalMilliseconds;
+                }
+                Array.Sort(elapsed);
+                Console.WriteLine($"TIMING {fixture.Id}: repeated captured view median={elapsed[4]:F2} ms; worst={elapsed[^1]:F2} ms.");
+                Require(elapsed[4] <= 1000d / 60,
+                    $"{fixture.Id}: median repeated-view layout must fit one 60 Hz frame (16.67 ms), observed {elapsed[4]:F2} ms.");
+            }
             var canvas = (Canvas)overlay.Content;
             var desktop = Forms.SystemInformation.VirtualScreen;
             var transform = PresentationSource.FromVisual(overlay)?.CompositionTarget?.TransformFromDevice
