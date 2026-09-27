@@ -586,3 +586,86 @@ Production artwork guards and assertions are unchanged. The corrected complete
 suite passes progressive captions, navigation cancellation, OCR during scrolling,
 caption reuse and Stop. The integrated Release publish also passes, retaining
 the existing NU1900 advisory-feed and WFAC010 manifest-DPI warnings.
+
+### Curved open bubbles and chapter coverage — 2026-09-28
+
+View 32's past-concern caption was rejected because the empty corners of its
+rectangle crossed a curved border. Its qualified plain source cover now permits
+the existing background check to evaluate each complete text-line strip. All
+strips must pass the same contrast and artwork checks; the caption background
+is transparent. Closed-container fitting and the 12-DIP floor are unchanged.
+
+The public curved-open-bubble replay failed before the change and passes after
+it, including original-ink concealment and exact border/artwork preservation.
+The eight-region captured-view replay keeps the complete passage local at
+12 DIP in five lines. All 1,223 checked dark exterior pixels and both checked
+side-border strips remain unchanged. An older open-bubble control now fits at
+23 DIP; its annotation allows transparent padding while its 3,798 protected
+pixels remain unchanged.
+
+All 14 standard cases pass. Repeated-view medians are 0.25–1.01 ms, worst
+3.14 ms. The actual view 32 repeat median is 3.20 ms, worst 5.53 ms; first
+layout took 969 ms. These are renderer timings, with no matched baseline for
+this slice. Additional per-line checks run only when the rectangle fails;
+existing work limits and unchanged-view reuse remain in place.
+
+Complete processing of 16 later chapter captures on the preceding area/median
+build produced six strict passes and ten failures. Four required-passage
+failures differ only in punctuation; another preserves the required words
+across two regions. Remaining content defects include a missed white narration,
+recognition errors in the appeal and color heading, omitted colored words,
+a missing promotional title, and grouping of two right-side color passages.
+Whole-capture counts include browser controls and cropped neighboring text;
+they are not a count of manga bubbles or a measure of manga margin use.
+
+A fixed-translation comparison against `b2aa679` found that its stricter fill
+rule regressed one pale color bubble from a local caption to the margin.
+The app refresh was held while correcting that regression. Passing the earlier
+boundary controls did not establish general fill quality. Source captures and
+all strict failures remain private under `.cache/replay/senmanga-acceptance/`.
+Full live chapter acceptance and the release gate remain open.
+
+### Pale fill and joined-container recovery
+
+The pale color-bubble regression is corrected. Flood connectivity retains the
+12-level darker limit, while allowing up to 16 levels brighter only for pale
+fill. Dark fills keep the stricter limit in both directions, using the existing
+145 luminance convention. A pale-highlight regression failed before this
+change. A mirrored faint-light-outline control then caught an overly broad
+version; both now pass with exact exterior checks.
+
+Saved view 45 returns to a local 23-DIP caption, covering all 5,892 checked
+dark/red source-lettering pixels. The full view retains its existing unrelated
+toolbar assertion failure. View 11's entire composite is byte-identical to
+the protected-boundary reference; all 10,660 checked floor pixels are preserved.
+The color bubble still has visibly jagged transitions between sampled gray fill
+and bright interior texture. Complete lettering coverage does not establish
+seamless background restoration.
+
+View 41's joined bubble was rejected because its first sampled point was on
+matching white paper outside the contour. After an escaped flood, the renderer
+now tries at most one other existing sample outside the visited component,
+keeping the same fill and qualification rules. Each actual attempt reserves its
+full search area from the existing four-million-pixel render budget; arrays are
+reused. Rejected artwork/ink qualifications do not trigger another attempt.
+The public regression fails before this change and passes afterward, including
+an opened-outline control, complete text, and unchanged border/artwork pixels.
+The saved passage is now local at 22 DIP across both lobes. Its original
+recognition errors and toolbar assertion failure remain recorded.
+
+The combined 16-view fixed-text comparison introduces no local-to-margin moves,
+missing captions, or work-budget exceptions. Its original six strict passes and
+ten failures remain unchanged. No text was shortened. The final current-source
+run passes all 14 standard renderer cases with identical repeated renders:
+repeat medians 0.19–1.51 ms, worst repeat 3.46 ms, first layouts 76.51–504.69 ms.
+These are isolated renderer measurements, not live FPS or translation latency.
+The extra flood and per-line checks affect new layouts; their individual costs
+have not been isolated. The complete session lifecycle suite and Release publish
+pass, retaining the existing NU1900 and WFAC010 warnings.
+
+Further diagnosis of view 15 rejects a quick threshold-only detector fix. A tight
+proposal rerun recovers only tiny fragments; the existing recognizer mixes
+neighboring columns in both the broad and narrower proposals and misses the
+required literal passage. No production detector threshold, OCR model, or
+translation behavior changed. Full live chapter coverage, caption balance,
+color-fill seams, and these source-content losses remain open.

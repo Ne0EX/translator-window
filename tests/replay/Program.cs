@@ -114,7 +114,8 @@ internal static class Program
                     "A single ellipsis glyph in a narrow bubble must render three complete dots of matching width.");
                 var openBubble = fixture with { Background = "open-bubble", Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(275, 120, 21, 86), Translation = "ได้เลย..." } },
-                    TextContainers = new[] { new ContainerFixture("short", new Box(240, 100, 91, 166), true) } };
+                    // Transparent padding may overlap the outline; the pixel checks below protect the actual border.
+                    TextContainers = new[] { new ContainerFixture("short", new Box(235, 100, 101, 171), true) } };
                 var openPixels = Pixels(BuildFrame(openBubble));
                 Paint(openPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(235, 100, 101, 171),
                     (x, y) => {
@@ -131,6 +132,8 @@ internal static class Program
                     PixelFormats.Bgra32, null, openPixels, fixture.Width * 4);
                 openFrame.Freeze();
                 var openResult = Replay(openBubble, openFrame);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics,
+                    openBubble with { Id = "open-narrow-bubble" }, openFrame, openResult, "fixed-text");
                 Verify(openBubble, openResult);
                 var openRendered = Pixels(openResult.Rendered);
                 Require(Math.Abs(openRendered[(126 * fixture.Width + 280) * 4] - 248) <= 1,
@@ -142,6 +145,40 @@ internal static class Program
                         Require(openPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(openRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Open bubble placement must preserve its curved border and exterior artwork.");
+
+                var curvedOpen = fixture with { Background = "curved-open-bubble", Regions = new[] {
+                    fixture.Regions[0] with { Bounds = new Box(270, 158, 47, 97),
+                        Translation = "...เรื่องในอดีตนั่นแหละ ฉันยังคงกังวลอยู่เลย" } },
+                    TextContainers = new[] { new ContainerFixture("short", new Box(239, 125, 108, 167), true) } };
+                var curvedPixels = Pixels(BuildFrame(curvedOpen));
+                Paint(curvedPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(235, 120, 116, 180),
+                    (x, y) => {
+                        double radius = Math.Pow((x - 291d) / 49, 2)
+                            + (y < 176 ? Math.Pow((y - 176d) / 49, 2)
+                                : y > 234 ? Math.Pow((y - 234d) / 49, 2) : 0);
+                        if (y >= 279 && Math.Abs(x - 291) < 14) return ((byte)248, (byte)248, (byte)248);
+                        return radius > 1 ? ((byte)90, (byte)120, (byte)150)
+                            : radius >= 0.94 ? ((byte)18, (byte)18, (byte)18)
+                            : (curvedPixels[(y * fixture.Width + x) * 4 + 2],
+                                curvedPixels[(y * fixture.Width + x) * 4 + 1], curvedPixels[(y * fixture.Width + x) * 4]);
+                    });
+                var curvedFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, curvedPixels, fixture.Width * 4);
+                curvedFrame.Freeze();
+                var curvedResult = Replay(curvedOpen, curvedFrame);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics,
+                    curvedOpen with { Id = "curved-open-bubble" }, curvedFrame, curvedResult, "fixed-text");
+                Verify(curvedOpen, curvedResult);
+                var curvedRendered = Pixels(curvedResult.Rendered);
+                Require(Math.Abs(curvedRendered[(163 * fixture.Width + 274) * 4] - 248) <= 1,
+                    "An open curved bubble must conceal its original ink with the sampled paper fill.");
+                for (int y = 120; y < 300; y++)
+                for (int x = 235; x < 351; x++)
+                    if (!curvedOpen.Regions[0].Bounds.Drawing.Contains(x, y)
+                        && curvedPixels[(y * fixture.Width + x) * 4] != 248)
+                        Require(curvedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(curvedRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Complete local lines in an open curved bubble must preserve its border and exterior artwork.");
             }
             if (fixture.Background == "bubble")
             {
@@ -187,6 +224,38 @@ internal static class Program
                         Require(texturedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(shortRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Filling a roomy bubble around short text must preserve its outline and exterior artwork.");
+                var highlightedPixels = Pixels(frame);
+                for (int y = 105; y < 300; y++)
+                for (int x = 220; x < 375; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) < 0.94
+                        && highlightedPixels[(y * fixture.Width + x) * 4] == 248)
+                    {
+                        bool highlight = y >= 175 && y < 189;
+                        Set(highlightedPixels, fixture.Width, x, y, highlight ? (byte)253 : (byte)238,
+                            highlight ? (byte)252 : (byte)237, highlight ? (byte)255 : (byte)242);
+                    }
+                var highlightedFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, highlightedPixels, fixture.Width * 4);
+                highlightedFrame.Freeze();
+                var highlightedFixture = fixture with { Background = "highlighted-bubble" };
+                var highlightedResult = Replay(highlightedFixture, highlightedFrame);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics,
+                    highlightedFixture with { Id = "highlighted-bubble" }, highlightedFrame, highlightedResult, "fixed-text");
+                Verify(highlightedFixture, highlightedResult);
+                var highlightedRendered = Pixels(highlightedResult.Rendered);
+                foreach (var point in new[] { new Drawing.Point(293, 128), new Drawing.Point(293, 277) })
+                {
+                    int pixel = (point.Y * fixture.Width + point.X) * 4;
+                    Require(highlightedRendered[pixel] == 242 && highlightedRendered[pixel + 1] == 237
+                        && highlightedRendered[pixel + 2] == 238,
+                        "A pale bubble highlight must not split source coverage or leave original lettering visible.");
+                }
+                for (int y = 0; y < fixture.Height; y++)
+                for (int x = 0; x < fixture.Width; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                        Require(highlightedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(highlightedRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Crossing an interior highlight must preserve the closed bubble outline and exterior artwork.");
                 var weakBoundaryPixels = Pixels(frame);
                 Paint(weakBoundaryPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(185, 100, 195, 205),
                     (x, y) => Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) > 1
@@ -214,6 +283,27 @@ internal static class Program
                             Require(Math.Abs(weakBoundaryPixels[(y * fixture.Width + x) * 4 + channel]
                                 - weakRendered[(y * fixture.Width + x) * 4 + channel]) <= 1,
                                 "A faint bubble boundary must preserve its outline and adjacent floor within one compositor rounding level.");
+                var weakDarkPixels = (byte[])weakBoundaryPixels.Clone();
+                for (int pixel = 0; pixel < weakDarkPixels.Length; pixel += 4)
+                    if (weakDarkPixels[pixel] == weakDarkPixels[pixel + 1]
+                        && weakDarkPixels[pixel] == weakDarkPixels[pixel + 2])
+                        weakDarkPixels[pixel] = weakDarkPixels[pixel + 1] = weakDarkPixels[pixel + 2]
+                            = (byte)Math.Clamp(272 - weakDarkPixels[pixel], 0, 255);
+                var weakDarkFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, weakDarkPixels, fixture.Width * 4);
+                weakDarkFrame.Freeze();
+                var weakDarkResult = Replay(fixture with { Background = "weak-dark-boundary" }, weakDarkFrame);
+                Verify(fixture with { Background = "weak-dark-boundary" }, weakDarkResult);
+                var weakDarkRendered = Pixels(weakDarkResult.Rendered);
+                Require(weakDarkRendered[(128 * fixture.Width + 293) * 4] == 24,
+                    "A dark bubble must still cover original lettering inside a faint light boundary.");
+                for (int y = 100; y < 305; y++)
+                for (int x = 185; x < 380; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                        for (int channel = 0; channel < 4; channel++)
+                            Require(Math.Abs(weakDarkPixels[(y * fixture.Width + x) * 4 + channel]
+                                - weakDarkRendered[(y * fixture.Width + x) * 4 + channel]) <= 1,
+                                "A faint light outline around a dark bubble must preserve adjacent artwork.");
                 var counterPixels = Pixels(frame);
                 Paint(counterPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(310, 258, 16, 17),
                     (x, y) => x < 312 || x >= 324 || y < 260 || y >= 273
@@ -363,6 +453,53 @@ internal static class Program
                             Require(Math.Abs(offsetPixels[(y * fixture.Width + x) * 4 + channel]
                                 - offsetRendered[(y * fixture.Width + x) * 4 + channel]) <= 1,
                                 "Offset joined bubble outlines and exterior artwork must remain unchanged within one compositor rounding level.");
+                var whiteOffset = offsetBubble with { Id = "white-offset-bubble", Regions = new[] {
+                    offsetBubble.Regions[0] with { Bounds = new Box(277, 132, 66, 122) } } };
+                var whiteOffsetPixels = (byte[])offsetPixels.Clone();
+                Paint(whiteOffsetPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(155, 10, 310, 366),
+                    (x, y) => InsideOffsetBubble(x, y)
+                        ? (whiteOffsetPixels[(y * fixture.Width + x) * 4 + 2],
+                            whiteOffsetPixels[(y * fixture.Width + x) * 4 + 1], whiteOffsetPixels[(y * fixture.Width + x) * 4])
+                        : ((byte)248, (byte)248, (byte)248));
+                var whiteOffsetFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, whiteOffsetPixels, fixture.Width * 4);
+                whiteOffsetFrame.Freeze();
+                var whiteOffsetResult = Replay(whiteOffset, whiteOffsetFrame);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics, whiteOffset, whiteOffsetFrame,
+                    whiteOffsetResult, "fixed-text");
+                Verify(whiteOffset, whiteOffsetResult);
+                var whiteOffsetRendered = Pixels(whiteOffsetResult.Rendered);
+                Require(whiteOffsetResult.Items.Single(item => item.Kind == "caption").FallbackReason is null
+                    && whiteOffsetRendered[(140 * fixture.Width + 321) * 4] == 248
+                    && whiteOffsetRendered[(236 * fixture.Width + 278) * 4] == 248,
+                    "A joined bubble on matching exterior paper must conceal both source passages and retain its caption locally.");
+                var whiteOffsetRepeated = Replay(whiteOffset, whiteOffsetFrame);
+                Require(whiteOffsetRepeated.RenderHash == whiteOffsetResult.RenderHash,
+                    "A joined bubble with matching exterior paper must render stable repeated pixels.");
+                for (int y = 105; y < 310; y++)
+                for (int x = 220; x < 375; x++)
+                    if (!InsideOffsetBubble(x, y) || whiteOffsetPixels[(y * fixture.Width + x) * 4] == 18
+                        && !new Drawing.Rectangle(320, 136, 4, 12).Contains(x, y)
+                        && !new Drawing.Rectangle(277, 232, 4, 12).Contains(x, y))
+                        for (int channel = 0; channel < 4; channel++)
+                            Require(Math.Abs(whiteOffsetPixels[(y * fixture.Width + x) * 4 + channel]
+                                - whiteOffsetRendered[(y * fixture.Width + x) * 4 + channel]) <= 1,
+                                "Retrying a bubble seed must preserve the outline and matching exterior paper.");
+                var openedOffsetPixels = (byte[])whiteOffsetPixels.Clone();
+                Paint(openedOffsetPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(225, 238, 12, 5),
+                    (_, _) => ((byte)248, (byte)248, (byte)248));
+                var openedOffsetFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, openedOffsetPixels, fixture.Width * 4);
+                openedOffsetFrame.Freeze();
+                var openedOffset = Replay(whiteOffset, openedOffsetFrame, allowLayoutRejection: true);
+                var openedOffsetRendered = Pixels(openedOffset.Rendered);
+                for (int y = 105; y < 310; y++)
+                for (int x = 220; x < 375; x++)
+                    if (openedOffsetPixels[(y * fixture.Width + x) * 4] == 18
+                        && !whiteOffset.Regions[0].Bounds.Drawing.Contains(x, y))
+                        Require(openedOffsetPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(openedOffsetRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Retrying an open joined bubble must not paint over its remaining outline.");
                 var inkAtSeed = Pixels(frame);
                 Paint(inkAtSeed, fixture.Width, fixture.Height, new Drawing.Rectangle(255, 197, 4, 12),
                     (_, _) => ((byte)18, (byte)18, (byte)18));

@@ -619,10 +619,14 @@ public sealed class SubtitleOverlay : Window
                                 candidateBackground = BackgroundBrush(candidate, cover, captureBounds, backgroundPixels,
                                     frame, style, sourceCovers[i]?.Caption, sourceCovers[i]?.Bounds,
                                     sourceCovers[i]?.Background, workBudget, cancellationToken, sourceCovers[i]?.Plan);
-                                if (candidateBackground is null && hasContainer && thai
-                                    && sourceCovers[i]?.Plan is { } containerPlan
+                                if (candidateBackground is null && thai
+                                    && sourceCovers[i]?.Plan is { Classification: SourceCoverClass.Plain } containerPlan
                                     && LinesFitCover(text, candidate, captureBounds, containerPlan,
-                                        scaleX, scaleY, insetY, workBudget, cancellationToken))
+                                        scaleX, scaleY, insetY, workBudget, cancellationToken,
+                                        hasContainer ? null : line => BackgroundBrush(line, cover, captureBounds,
+                                            backgroundPixels, frame, style, sourceCovers[i]?.Caption,
+                                            sourceCovers[i]?.Bounds, sourceCovers[i]?.Background, workBudget,
+                                            cancellationToken, containerPlan) is not null))
                                     candidateBackground = Brushes.Transparent;
                                 return candidateBackground is not null;
                             });
@@ -1197,9 +1201,8 @@ public sealed class SubtitleOverlay : Window
             var search = localSource;
             search.Inflate(Math.Max(96, Math.Max(localSource.Width, localSource.Height)), Math.Max(96, localSource.Height));
             search.Intersect(new Drawing.Rectangle(0, 0, capture.Width, capture.Height));
-            var plan = display?.Cover ?? (workBudget.TryBubble(search.Width * search.Height)
-                ? SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
-                    localSource, search, cancellationToken) : null);
+            var plan = display?.Cover ?? SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
+                localSource, search, workBudget.TryBubble, cancellationToken);
             if (plan is not null)
             {
                 var bubble = plan.FootprintBounds;
@@ -1354,7 +1357,8 @@ public sealed class SubtitleOverlay : Window
 
     private static bool LinesFitCover(TextBlock text, Drawing.Rectangle bounds, Drawing.Rectangle capture,
         SourceCoverPlan plan, double scaleX, double scaleY, double insetY,
-        RenderWorkBudget workBudget, CancellationToken cancellationToken)
+        RenderWorkBudget workBudget, CancellationToken cancellationToken,
+        Func<Drawing.Rectangle, bool>? plainLine = null)
     {
         // A bubble's rounded corners need not contain the empty corners of a centered text block.
         var lines = text.Text.Replace("\r", "").Split('\n');
@@ -1369,6 +1373,11 @@ public sealed class SubtitleOverlay : Window
             int left = bounds.Left + (bounds.Width - width) / 2;
             int top = bounds.Top + (int)Math.Floor((insetY + line * lineHeight) / scaleY);
             int bottom = bounds.Top + (int)Math.Ceiling((insetY + (line + 1) * lineHeight) / scaleY);
+            if (plainLine is not null)
+            {
+                if (!plainLine(new Drawing.Rectangle(left, top, width, bottom - top))) return false;
+                continue;
+            }
             for (int y = top; y < bottom; y++)
             {
                 cancellationToken.ThrowIfCancellationRequested();

@@ -78,7 +78,7 @@ public static class SourceCover
             && (long)area.Width * area.Height <= MaxPermittedPixels;
 
     internal static SourceCoverPlan? TryCreateBubble(byte[] pixels, int width, int height,
-        Rectangle text, Rectangle search, CancellationToken cancellationToken)
+        Rectangle text, Rectangle search, Func<int, bool> reserveFlood, CancellationToken cancellationToken)
     {
         if (!IsWithinBudget(search) || !search.Contains(text)) return null;
         // ponytail: bounded closed bubbles with nearly uniform fill; open borders and stronger textures use the footprint fallback.
@@ -113,25 +113,58 @@ public static class SourceCover
             { support = matches; nearest = distance; selected = i; }
         }
         var (seedX, seedY, fill) = samples[selected];
+        int brighterTolerance = 0.299 * fill.R + 0.587 * fill.G + 0.114 * fill.B >= 145 ? 16 : 12;
         int count = search.Width * search.Height;
+        if (!reserveFlood(count)) return null;
         var inside = new bool[count];
         var pending = new int[count];
         int head = 0, tail = 0;
-        int seed = (seedY - search.Top) * search.Width + seedX - search.Left;
-        inside[seed] = true;
-        pending[tail++] = seed;
         int minX = seedX, maxX = seedX, minY = seedY, maxY = seedY;
-        while (head < tail)
+        // ponytail: at most two floods; revisit only if another observed bubble needs more seed attempts.
+        for (int attempt = 0; attempt < 2; attempt++)
         {
-            if ((head & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
-            int index = pending[head++];
-            int x = index % search.Width + search.Left, y = index / search.Width + search.Top;
-            if (x == search.Left || x == search.Right - 1 || y == search.Top || y == search.Bottom - 1)
-                return null;
-            minX = Math.Min(minX, x); maxX = Math.Max(maxX, x);
-            minY = Math.Min(minY, y); maxY = Math.Max(maxY, y);
-            Visit(index - 1, x - 1, y); Visit(index + 1, x + 1, y);
-            Visit(index - search.Width, x, y - 1); Visit(index + search.Width, x, y + 1);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (attempt != 0)
+            {
+                if (!reserveFlood(count)) return null;
+                Array.Clear(inside);
+            }
+            head = tail = 0;
+            minX = maxX = seedX; minY = maxY = seedY;
+            int seed = (seedY - search.Top) * search.Width + seedX - search.Left;
+            inside[seed] = true;
+            pending[tail++] = seed;
+            bool escaped = false;
+            while (head < tail)
+            {
+                if ((head & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
+                int index = pending[head++];
+                int x = index % search.Width + search.Left, y = index / search.Width + search.Top;
+                if (x == search.Left || x == search.Right - 1 || y == search.Top || y == search.Bottom - 1)
+                { escaped = true; break; }
+                minX = Math.Min(minX, x); maxX = Math.Max(maxX, x);
+                minY = Math.Min(minY, y); maxY = Math.Max(maxY, y);
+                Visit(index - 1, x - 1, y); Visit(index + 1, x + 1, y);
+                Visit(index - search.Width, x, y - 1); Visit(index + search.Width, x, y + 1);
+            }
+            if (!escaped) break;
+            if (attempt == 1) return null;
+
+            // Matching exterior paper can win the seed tie; retry once outside that escaped component.
+            selected = -1;
+            nearest = long.MaxValue;
+            for (int i = 0; i < samples.Length; i++)
+            {
+                var sample = samples[i];
+                int index = (sample.Y - search.Top) * search.Width + sample.X - search.Left;
+                if (inside[index] || !MatchesFill(sample.Color.B, sample.Color.G, sample.Color.R)) continue;
+                int dx = sample.X * 2 - text.Left - text.Right;
+                int dy = sample.Y * 2 - text.Top - text.Bottom;
+                long distance = (long)dx * dx + (long)dy * dy;
+                if (distance < nearest) { nearest = distance; selected = i; }
+            }
+            if (selected < 0) return null;
+            (seedX, seedY, _) = samples[selected];
         }
         var bounds = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
         // Narrow lettering can occupy little of a bubble; also allow a square twice the utterance's length.
@@ -184,12 +217,14 @@ public static class SourceCover
         {
             if (inside[index]) return;
             int offset = y * stride + x * 4;
-            // Faint outlines must block connectivity into nearby light artwork.
-            if (Math.Abs(pixels[offset] - fill.B) > 12 || Math.Abs(pixels[offset + 1] - fill.G) > 12
-                || Math.Abs(pixels[offset + 2] - fill.R) > 12) return;
+            if (!MatchesFill(pixels[offset], pixels[offset + 1], pixels[offset + 2])) return;
             inside[index] = true;
             pending[tail++] = index;
         }
+        // Keep faint darker outlines closed while allowing brighter highlights inside a pale bubble.
+        bool MatchesFill(byte b, byte g, byte r) => b >= fill.B - 12 && b <= fill.B + brighterTolerance
+            && g >= fill.G - 12 && g <= fill.G + brighterTolerance
+            && r >= fill.R - 12 && r <= fill.R + brighterTolerance;
         void Outside(int index)
         {
             if (inside[index] || exterior[index]) return;
