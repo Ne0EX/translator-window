@@ -92,6 +92,9 @@ internal static class Program
             }
             if (fixture.Background == "bubble")
             {
+                var cornerNeighbor = fixture with { Regions = fixture.Regions.Concat(new[] {
+                    new RegionFixture("neighbor", new Box(225, 110, 12, 15), "pending", "") }).ToArray() };
+                Verify(fixture, Replay(cornerNeighbor, frame, allowMissing: true));
                 var narrowDetection = fixture with { Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(282, 143, 32, 120),
                         Translation = "ฉันจะใช้ความสามารถทั้งหมดที่มี เพื่อทำให้ความปรารถนาของฉันเป็นจริง" } } };

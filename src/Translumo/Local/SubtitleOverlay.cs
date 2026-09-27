@@ -1182,7 +1182,6 @@ public sealed class SubtitleOverlay : Window
                 {
                     var overlap = Drawing.Rectangle.Intersect(bubble, other);
                     if (overlap.IsEmpty) return false;
-                    if (display is null) return true;
                     // A cover's transparent bounding-box fringe can overlap the next OCR region.
                     for (int y = overlap.Top; y < overlap.Bottom; y++)
                     for (int x = overlap.Left; x < overlap.Right; x++)

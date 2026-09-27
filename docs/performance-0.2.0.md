@@ -314,3 +314,28 @@ only during layout search; unchanged frames reuse visuals. First layout remains
 too expensive to call optimized. No extra model calls or VRAM model allocations
 were added. Small, long-word and complex/open containers still use margins;
 the reader's request for predominantly local captions is not fully satisfied.
+
+## Bubble boundary conflict correction — resumed QA
+
+A public-renderer regression showed that a pending region in the empty corner of
+an oval bubble's bounding rectangle incorrectly rejected the whole source cover.
+Bubble conflicts now use the existing per-pixel mask check already used by display
+headings. Actual overlapping pending text remains protected. The new regression
+fails before the one-line correction and passes afterward; all 14 standard cases
+pass, including exterior artwork preservation and pending-region protection.
+
+The three existing captured views retain exactly the same rendered pixels as
+before this correction. Repeated medians in this run: Comic Days 3.19 ms,
+Tameshiyo 3.36 ms, Senmanga 1.86 ms. These are renderer replays, not browser FPS.
+Comic Days and Tameshiyo retain their documented strict text-verification failures.
+
+A fresh live Senmanga source capture (1524 by 810; browser already reported Restore)
+was replayed through the local OCR/translation pipeline. Ordinary dialogue renders
+locally; remaining margin captions include browser-toolbar detections, text over
+artwork, and clipped passages at the viewport top. The run fails strict text
+verification for region 10: the translator returned Chinese for the Japanese
+utterance and the Thai safety filter shows its failure label. This is not a
+caption-placement failure. Private source, diagnostics and inspected composite:
+`.cache/replay/live-bubble-followup/result/`. Browser chrome must not be counted
+as failed manga bubble placement. No new live animation smoothness claim or
+release acceptance follows from this check.
