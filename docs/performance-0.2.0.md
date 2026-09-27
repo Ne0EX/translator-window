@@ -669,3 +669,17 @@ neighboring columns in both the broad and narrower proposals and misses the
 required literal passage. No production detector threshold, OCR model, or
 translation behavior changed. Full live chapter coverage, caption balance,
 color-fill seams, and these source-content losses remain open.
+
+Follow-up diagnosis explains the remaining color seam: view 45's bright lower
+interior connects to the neighboring passage through an open white neck. A
+four-connected 138-step path from `(550,450)` to `(530,568)` stays at or above
+250 in every color channel, crosses no dark outline, and remains outside the
+current cover. The sampled gray component is not a complete text-container
+boundary. A wider color threshold alone is therefore not a justified fix;
+handling the shared area must preserve both passages and neighboring artwork.
+
+One additional private OCR probe inverted luminance on view 15's existing
+narrow crop. It still mixed neighboring columns and omitted the required
+literal passage. The initial `一` is visible inside the crop, so its loss is
+recognition failure rather than clipping. These diagnoses changed no production
+code or published app binary; the `81954c3` checkpoint remains unchanged.
