@@ -556,9 +556,9 @@ public sealed class SubtitleOverlay : Window
                         position = bubbleBounds;
                         selectedFontSize = fontSize;
                         displayText = bubbleText.Text;
-                        break;
                     }
-                    if (fontSize > 24) continue;
+                    // Keep the contour fit unless a centered paragraph fits at the same readable size.
+                    if (fontSize > 24 && caption is null) continue;
                 }
                 foreach (double widthDip in new[] { source.Width * scaleX, (source.Width + 12) * scaleX,
                     source.Width * scaleX * 1.5, source.Width * scaleX * 2,

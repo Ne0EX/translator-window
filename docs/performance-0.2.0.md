@@ -916,3 +916,75 @@ timings are in `.cache/live-qa/region0-search/timing-*enclosed*.log`.
 The final Release renderer suite passes all 14 cases, including the strengthened
 notch control, and the complete session lifecycle suite passes. Fresh live visual
 verification and full chapter acceptance remain pending.
+
+### Centered paragraphs at the retained font size — 2026-09-28
+
+The contour fitter stopped the font search as soon as it found complete text.
+It never tried the existing ordinary paragraph widths at that successful font.
+The renderer now retains the contour result while checking those widths, then
+uses the existing placement score to choose an accepted paragraph. If none
+qualifies, the contour result remains. Font search, color qualification, masks,
+word segmentation, collision checks and work limits are unchanged.
+
+The matched 144-DPI view now places the complete upper-left passage in four
+centered lines at the same 32 DIP, instead of five offset lines. Caption bounds
+change from `[695,327,267,320]` to `[721,357,214,260]`; source-cover bounds remain
+`[695,283,267,409]`. All 13 captions pass the actual-source replay. Faint source
+lettering remains in the separate lower-left passage; this change does not
+repair its lettering-only cover.
+
+A public synthetic narration box reproduces the first-line offset at 43 DIP
+before the fix. The fixed renderer keeps both complete lines at 43 DIP, centers
+their rendered glyphs within six pixels of the independently drawn box center,
+and preserves every outline/exterior pixel. All 14 standard renderer cases pass,
+including joined and offset bubbles. Two earlier synthetic preparations did not
+isolate this behavior and are explicitly excluded from RED/GREEN evidence.
+
+The comparison covers 44 saved views: 26 earlier Senmanga views, 16 later views,
+Comic Days and Tameshiyo. All 409 captions remain; there are no new margins,
+caption losses or strict failures. The 28 passes and 16 existing failures are
+unchanged. Every caption retains its font size except view 46 region 2, which
+grows from 14 to 15 DIP as its neighbor's placement frees space. Some narrow
+bubbles use more centered lines at the same font. Views 02, 25, 40 and 46 and the
+matched live-source result were visually inspected. Earlier view 28 lacks a
+saved complete-processing result and is not fabricated or counted.
+
+Two paired timing sequences, with the order reversed, used the same 13-region
+view and no model inference. Repeated-view medians are 3.28–4.79 ms after the
+change versus 3.23–4.28 ms before it. First fresh-overlay samples are
+945.28/914.87 ms versus 950.82/873.86 ms. The later fresh-overlay samples are
+587.40/473.52 and 522.07/460.35 ms, compared with 487.83/436.82 and
+474.65/375.34 ms: approximately 35–100 ms additional work in those samples.
+These small, order-sensitive samples establish neither a stable latency estimate
+nor live scrolling cadence. The extra work occurs only at the first successful
+contour font; repeated captures continue to reuse the accepted layout.
+
+Private evidence: `.cache/replay/upper-bubble-line-placement/` contains the
+public RED/GREEN and immutable candidate; `.cache/replay/centered-layout-comparison/`
+contains all 44 comparisons, the actual-source replay and paired timing logs.
+Source images and derivatives remain local. Full-chapter and live visual
+acceptance remain open. The complete session lifecycle suite also passes,
+including navigation invalidation, progressive captions and Stop cleanup.
+
+### Tilted-card recognition diagnostic — 2026-09-28
+
+One six-crop batch uses the pinned `kha-white/manga-ocr-base` revision
+`aa6573bd10b0d446cbf622e29c3e084914df9741` through the existing CUDA FP16
+`OnnxMangaRecognizer`. The original weak-box crop and a wider axis-aligned crop
+misread the card; one crop rectified from three observed corners and an explicitly
+inferred fourth corner reads the required `不適性` exactly. The ordinary control
+also reads correctly. Hair and blank controls generate invented text, so nonempty
+recognition cannot qualify weak detections. This isolates useful crop/geometry
+information, not rotation alone or a production recovery path.
+
+Model construction took 2.568 s and the six-crop batch 0.577 s. Peak child working
+set was about 814 MiB; minimum free physical memory was 608 MiB and available
+commit 3.72 GiB. These are one monitored diagnostic's measurements. The owned
+child exited successfully, with no CPU fallback or production change.
+
+One automatic outline candidate using the existing Otsu mask and OpenCV contour
+operations finds no bounded card outline. Its border connects to a panel-sized
+component; the current block head supplies no angle and saved DBNet polygons
+also miss the target. Automatic association of the partial card edges remains
+unresolved. No detector threshold, retry or recognizer model was changed.
+Evidence is private under `.cache/replay/08-card-recovery/`.

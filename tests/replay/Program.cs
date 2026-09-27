@@ -359,6 +359,49 @@ internal static class Program
                         Require(exposedInkPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(exposedInkRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Covering lettering beside a pale highlight must preserve the outline and exterior artwork.");
+                var balancedSourcePixels = Pixels(frame);
+                Paint(balancedSourcePixels, fixture.Width, fixture.Height, new Drawing.Rectangle(220, 105, 155, 195),
+                    (x, y) => x < 222 || x >= 373 || y < 107 || y >= 298
+                        ? ((byte)18, (byte)18, (byte)18) : ((byte)238, (byte)237, (byte)242));
+                for (int x = 264; x < 329; x += 8)
+                    Paint(balancedSourcePixels, fixture.Width, fixture.Height, new Drawing.Rectangle(x, 160, 3, 82),
+                        (_, _) => ((byte)18, (byte)18, (byte)18));
+                Paint(balancedSourcePixels, fixture.Width, fixture.Height, new Drawing.Rectangle(222, 184, 104, 10),
+                    (x, y) => balancedSourcePixels[(y * fixture.Width + x) * 4] == 18
+                        ? ((byte)18, (byte)18, (byte)18) : ((byte)255, (byte)255, (byte)255));
+                var balancedFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, balancedSourcePixels, fixture.Width * 4);
+                balancedFrame.Freeze();
+                var balancedFixture = fixture with { Background = "centered-pale-bubble" };
+                var balancedResult = Replay(balancedFixture, balancedFrame);
+                Verify(balancedFixture, balancedResult);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics,
+                    balancedFixture with { Id = "centered-pale-bubble" }, balancedFrame, balancedResult, "fixed-text");
+                var balancedCaption = balancedResult.Items.Single(item => item.Kind == "caption");
+                Require(balancedCaption.FontSize >= 43,
+                    "A complete centered caption must retain a readable font in the available bubble area.");
+                var balancedPixels = Pixels(balancedResult.Rendered);
+                for (int line = 0; line < balancedCaption.Lines.Length; line++)
+                {
+                    int firstRow = balancedCaption.Bounds.Y + balancedCaption.Bounds.Height * line / balancedCaption.Lines.Length;
+                    int lastRow = balancedCaption.Bounds.Y + balancedCaption.Bounds.Height * (line + 1) / balancedCaption.Lines.Length;
+                    int leftInk = fixture.Width, rightInk = -1;
+                    for (int y = firstRow; y < lastRow; y++)
+                    for (int x = balancedCaption.Bounds.X; x < balancedCaption.Bounds.X + balancedCaption.Bounds.Width; x++)
+                    {
+                        int balancedPixel = (y * fixture.Width + x) * 4;
+                        if (balancedSourcePixels[balancedPixel] < 180 || balancedPixels[balancedPixel] >= 128) continue;
+                        leftInk = Math.Min(leftInk, x); rightInk = Math.Max(rightInk, x);
+                    }
+                    Require(rightInk >= leftInk && Math.Abs((leftInk + rightInk) / 2d - 297.5) <= 6,
+                        "Complete caption lines must share the bubble center when its pale interior admits a centered arrangement.");
+                }
+                for (int y = 0; y < fixture.Height; y++)
+                for (int x = 0; x < fixture.Width; x++)
+                    if (!new Drawing.Rectangle(222, 107, 151, 191).Contains(x, y))
+                        Require(balancedSourcePixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(balancedPixels.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "A centered paragraph must preserve the bubble outline and exterior artwork.");
                 var notchPixels = (byte[])exposedInkPixels.Clone();
                 for (int y = 105; y <= 210; y++)
                 for (int x = 248; x <= 330; x++)

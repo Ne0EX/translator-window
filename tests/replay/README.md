@@ -21,6 +21,9 @@ when the Auto preset is selected. These checks use the public renderer only.
 Pale gaps newly enclosed by a qualified source-lettering cover must also be
 filled. A diagonal notch checks that an exterior-connected faint border remains
 visible, while an off-detection lettering probe requires full-bubble coverage.
+A pale narration-box case requires each rendered line to share the box center,
+retain the complete text at 43 DIP or larger, and preserve every outline and
+exterior pixel. Joined bubbles retain their contour-fitting checks.
 The stylized fixture deliberately records one heading as
 `unresolved-before-recognized-text`; it verifies that the evidence keeps the
 missing passage separate from a successfully rendered body caption, rather than
