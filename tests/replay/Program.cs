@@ -125,6 +125,8 @@ internal static class Program
                             : (openPixels[(y * fixture.Width + x) * 4 + 2],
                                 openPixels[(y * fixture.Width + x) * 4 + 1], openPixels[(y * fixture.Width + x) * 4]);
                     });
+                Paint(openPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(296, 128, 1, 1),
+                    (_, _) => ((byte)80, (byte)80, (byte)80));
                 var openFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
                     PixelFormats.Bgra32, null, openPixels, fixture.Width * 4);
                 openFrame.Freeze();
@@ -162,6 +164,56 @@ internal static class Program
                 Require(punctuationResult.Items.Single(item => item.Kind == "caption").FontSize >= 28
                     && Pixels(punctuationResult.Rendered)[(156 * fixture.Width + 273) * 4] == 248,
                     "A punctuation-sized compact mark inside detected text must be covered and retain roomy bubble layout.");
+                var shortUtterance = fixture with { Regions = new[] {
+                    fixture.Regions[0] with { Bounds = new Box(287, 165, 24, 74) } },
+                    TextContainers = new[] { new ContainerFixture("dialogue", new Box(236, 118, 126, 172), true) } };
+                var texturedPixels = Pixels(BuildFrame(shortUtterance));
+                Paint(texturedPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(256, 240, 84, 25),
+                    (x, y) => (x - 256) % 10 < 2 && (y - 240) % 10 < 2
+                        ? ((byte)225, (byte)225, (byte)225)
+                        : (texturedPixels[(y * fixture.Width + x) * 4 + 2],
+                            texturedPixels[(y * fixture.Width + x) * 4 + 1], texturedPixels[(y * fixture.Width + x) * 4]));
+                var texturedFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, texturedPixels, fixture.Width * 4);
+                texturedFrame.Freeze();
+                var shortUtteranceResult = Replay(shortUtterance, texturedFrame);
+                Verify(shortUtterance, shortUtteranceResult);
+                var shortRendered = Pixels(shortUtteranceResult.Rendered);
+                Require(Math.Abs(shortRendered[(261 * fixture.Width + 337) * 4] - 248) <= 1,
+                    "A short utterance must use its full closed bubble with a solid sampled fill over faint texture.");
+                for (int y = 118; y < 290; y++)
+                for (int x = 236; x < 362; x++)
+                    if (Math.Pow((x - 299d) / 63, 2) + Math.Pow((y - 204d) / 86, 2) >= 0.94)
+                        Require(texturedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(shortRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Filling a roomy bubble around short text must preserve its outline and exterior artwork.");
+                var weakBoundaryPixels = Pixels(frame);
+                Paint(weakBoundaryPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(185, 100, 195, 205),
+                    (x, y) => Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) > 1
+                        ? ((byte)90, (byte)120, (byte)150)
+                        : (weakBoundaryPixels[(y * fixture.Width + x) * 4 + 2],
+                            weakBoundaryPixels[(y * fixture.Width + x) * 4 + 1], weakBoundaryPixels[(y * fixture.Width + x) * 4]));
+                Paint(weakBoundaryPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(190, 192, 30, 22),
+                    (_, _) => ((byte)248, (byte)248, (byte)248));
+                Paint(weakBoundaryPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(220, 199, 3, 8),
+                    (_, _) => ((byte)234, (byte)234, (byte)234));
+                Paint(weakBoundaryPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(197, 199, 2, 2),
+                    (_, _) => ((byte)225, (byte)225, (byte)225));
+                var weakBoundaryFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, weakBoundaryPixels, fixture.Width * 4);
+                weakBoundaryFrame.Freeze();
+                var weakBoundaryResult = Replay(fixture, weakBoundaryFrame);
+                var weakRendered = Pixels(weakBoundaryResult.Rendered);
+                Verify(fixture with { Background = "weak-boundary" }, weakBoundaryResult);
+                Require(weakRendered[(128 * fixture.Width + 293) * 4] == 248,
+                    "A faint boundary must retain full bubble coverage of original lettering.");
+                for (int y = 100; y < 305; y++)
+                for (int x = 185; x < 380; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                        for (int channel = 0; channel < 4; channel++)
+                            Require(Math.Abs(weakBoundaryPixels[(y * fixture.Width + x) * 4 + channel]
+                                - weakRendered[(y * fixture.Width + x) * 4 + channel]) <= 1,
+                                "A faint bubble boundary must preserve its outline and adjacent floor within one compositor rounding level.");
                 var counterPixels = Pixels(frame);
                 Paint(counterPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(310, 258, 16, 17),
                     (x, y) => x < 312 || x >= 324 || y < 260 || y >= 273

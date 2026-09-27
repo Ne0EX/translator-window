@@ -1218,7 +1218,8 @@ namespace Translumo.Local
                     drawing.FillRectangle(animation, BackgroundBounds);
                 }
                 using var marker = new SolidBrush(Color.FromArgb(markerValue * 30, 0, 0));
-                drawing.FillRectangle(marker, 210, 110, 12, 12);
+                // Keep marker 7 inside its declared OCR region; adjacent artwork must remain protected.
+                drawing.FillRectangle(marker, markerValue == 7 ? 180 : 210, 110, 12, 12);
             }
             bitmap.SetPixel(0, 0, Color.FromArgb(markerValue, 0, 0));
             bitmap.SetPixel(210, 110, Color.FromArgb(markerValue, 0, 0));

@@ -81,7 +81,7 @@ public static class SourceCover
         Rectangle text, Rectangle search, CancellationToken cancellationToken)
     {
         if (!IsWithinBudget(search) || !search.Contains(text)) return null;
-        // ponytail: bounded flat, closed bubbles only; open borders and textured fills keep the footprint fallback.
+        // ponytail: bounded closed bubbles with nearly uniform fill; open borders and stronger textures use the footprint fallback.
         int stride = width * 4;
         // Sample around the text: one fixed seed can land on a glyph or furigana.
         var samples = new (int X, int Y, Pixel Color)[12];
@@ -134,9 +134,12 @@ public static class SourceCover
             Visit(index - search.Width, x, y - 1); Visit(index + search.Width, x, y + 1);
         }
         var bounds = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
-        // A short utterance can occupy very little of a small closed bubble.
+        // Narrow lettering can occupy little of a bubble; also allow a square twice the utterance's length.
+        long letteringLength = Math.Max(text.Width, text.Height);
+        long maximumArea = Math.Max(96 * 96,
+            Math.Max((long)text.Width * text.Height * 8, letteringLength * letteringLength * 4));
         if (!bounds.Contains(text) || tail < text.Width * text.Height / 2
-            || (long)bounds.Width * bounds.Height > Math.Max(96 * 96, (long)text.Width * text.Height * 8)) return null;
+            || (long)bounds.Width * bounds.Height > maximumArea) return null;
 
         // Flood the complement from outside: disconnected holes are lettering, the connected outline is preserved.
         var exterior = new bool[count];
@@ -181,8 +184,9 @@ public static class SourceCover
         {
             if (inside[index]) return;
             int offset = y * stride + x * 4;
-            if (Math.Abs(pixels[offset] - fill.B) > 16 || Math.Abs(pixels[offset + 1] - fill.G) > 16
-                || Math.Abs(pixels[offset + 2] - fill.R) > 16) return;
+            // Faint outlines must block connectivity into nearby light artwork.
+            if (Math.Abs(pixels[offset] - fill.B) > 12 || Math.Abs(pixels[offset + 1] - fill.G) > 12
+                || Math.Abs(pixels[offset + 2] - fill.R) > 12) return;
             inside[index] = true;
             pending[tail++] = index;
         }
@@ -216,8 +220,8 @@ public static class SourceCover
         {
             cancellationToken.ThrowIfCancellationRequested();
             int y = textRegion.Top + row;
-            left[row] = Average(textRegion.Left - sampleWidth, textRegion.Left, y);
-            right[row] = Average(textRegion.Right, textRegion.Right + sampleWidth, y);
+            left[row] = Median(textRegion.Left - sampleWidth, textRegion.Left, y);
+            right[row] = Median(textRegion.Right, textRegion.Right + sampleWidth, y);
             AccumulateError(textRegion.Left - sampleWidth, textRegion.Left, y, left[row]);
             AccumulateError(textRegion.Right, textRegion.Right + sampleWidth, y, right[row]);
         }
@@ -294,16 +298,21 @@ public static class SourceCover
         return new SourceCoverPlan(classification, image, permittedArea,
             Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1), mask, reconstruction, covered);
 
-        Pixel Average(int startX, int endX, int y)
+        Pixel Median(int startX, int endX, int y)
         {
-            long b = 0, g = 0, r = 0;
+            int count = endX - startX;
+            Span<byte> b = stackalloc byte[count], g = stackalloc byte[count], r = stackalloc byte[count];
             for (int x = startX; x < endX; x++)
             {
                 int offset = y * stride + x * 4;
-                b += sourceBgra32[offset]; g += sourceBgra32[offset + 1]; r += sourceBgra32[offset + 2];
+                b[x - startX] = sourceBgra32[offset];
+                g[x - startX] = sourceBgra32[offset + 1];
+                r[x - startX] = sourceBgra32[offset + 2];
             }
-            int count = endX - startX;
-            return new Pixel((byte)(b / count), (byte)(g / count), (byte)(r / count));
+            b.Sort(); g.Sort(); r.Sort();
+            int lower = (count - 1) / 2, upper = count / 2;
+            return new Pixel((byte)((b[lower] + b[upper]) / 2),
+                (byte)((g[lower] + g[upper]) / 2), (byte)((r[lower] + r[upper]) / 2));
         }
         void AccumulateError(int startX, int endX, int y, Pixel average)
         {

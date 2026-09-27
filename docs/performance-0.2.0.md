@@ -508,3 +508,81 @@ with repeated medians of 0.17–1.06 ms and a 3.50 ms worst repeat. The actual-v
 repeat median is 2.65 ms, worst 5.74 ms; first layout took 742 ms. Two additional
 bounded width candidates per font are the new-layout cost. This does not qualify
 arbitrary open/textured containers or resolve the longer open-edge apology.
+
+### Roomy short utterances and edge sampling — 2026-09-28
+
+Two further saved dialogue failures now stay local. Both have failing/passing
+checks through the public renderer, with fixed translations.
+
+- View 23: a 24×74-pixel text region was inside a 124×166-pixel closed bubble,
+  exceeding the old area ratio. The bounded area check now also permits four
+  times the square of the longer detected dimension. Existing closed-contour,
+  ink, artwork and neighboring-passage checks still apply. The complete caption
+  renders locally at 26 DIP. All seven regions are retained; 1,783 checked dark
+  outline/exterior pixels and all 7,795 pixels outside the annotated bubble in
+  its immediate neighborhood remain unchanged. Solid sampled RGB 249 replaces
+  faint interior texture. An empty leading line still places the caption low.
+- View 26: a tiny furigana fringe outside the detection distorted one row's
+  background average, rejecting an otherwise plain open-edge bubble. Background
+  sampling now uses the median of the existing two to six pixels per side.
+  Sample-error, smoothness, ink and artwork thresholds are unchanged. The full
+  caption renders locally at 14 DIP. All 4,024 pixels outside the detection but
+  under its enlarged caption remain unchanged by the source cover. The fringe
+  itself remains visible outside the detection.
+
+All 14 standard renderer cases and the private hair-protection control pass
+with both changes. Before the median change, view 23's repeated renderer median
+was 2.00 ms, worst 4.66 ms; its first layout took 633 ms. No combined timing
+claim is made from the subsequent correctness-only run. The median sorts at
+most six bytes per color channel; no model or new dependency was added.
+
+Computer Use source inspection has now reached the chapter-end controls,
+including the color promotion. Saved views 28–46 add literal expected passages
+for later complete-processing checks. These captures were made while Translumo
+was idle and therefore do not establish live overlay acceptance. The rebuilt
+app's live navigation check, complete source coverage and caption balance remain
+open. The faint-border follow-up below addresses the saved boundary leak.
+
+The observed Comet zoom was 80%; the new manifests were corrected from the
+capture helper's default of 1 to 0.8. Existing view 29/30 reports retain their
+original metadata and the correction is recorded in the private provenance.
+Image metadata remains 96 DPI; replay font sizes are WPF DIP and geometry is
+reported in captured-image pixels.
+
+The missing white narration in view 15 is confirmed as detector filtering loss:
+the full-view proposal scores 0.28065 and is discarded before NMS at the 0.3
+prefilter. A manga-column diagnostic crop recovers one fragment, but the required
+right passage scores 0.33727 and fails the later 0.4 threshold. Cropping alone
+does not recover the passage. No production detection threshold was changed.
+All image evidence and diagnostic outputs remain local under `.cache/replay/`.
+
+### Faint bubble boundary follow-up
+
+View 11's fill crossed a pale gray boundary into adjacent floor artwork. The
+connected area still closed inside the search rectangle, so the existing closure
+check accepted it. Tightening only the flood's per-channel color tolerance from
+16 to 12 preserves that boundary. Seed consensus, ink classification and artwork
+guards are unchanged. A public synthetic regression fails on the old tolerance
+and passes with the correction, requiring full source-text coverage and an
+unchanged neighboring floor and outline.
+
+The strict seven-region replay now passes: its fill bounds narrow from
+299×164 to 228×164 image pixels, the complete caption remains local at 15 DIP,
+and all five previously whitened floor pixels are unchanged. The roomy textured
+bubble, hair protection, long joined passage and all 14 standard cases pass.
+The offset-bubble replay keeps a complete local 16-DIP caption; its unrelated
+toolbar classification assertion still fails. No new timing claim is made from
+these correctness runs. The tighter tolerance may reject other varying fills;
+it does not establish general bubble segmentation.
+
+### Lifecycle fixture correction
+
+The session suite initially timed out waiting for five progressive captions.
+An instrumented comparison reproduced the same failure on `125a594`: all five
+translations completed, then layout refused the synthetic view. Marker 7's red
+square extended beyond its declared text region into protected background.
+Moving only that fixture marker inside the region restores the intended test.
+Production artwork guards and assertions are unchanged. The corrected complete
+suite passes progressive captions, navigation cancellation, OCR during scrolling,
+caption reuse and Stop. The integrated Release publish also passes, retaining
+the existing NU1900 advisory-feed and WFAC010 manifest-DPI warnings.
