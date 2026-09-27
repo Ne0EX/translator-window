@@ -176,6 +176,14 @@ between the two runs despite unchanged OCR, so translation equality across every
 region is not claimed. Private evidence and the executed assertion script remain
 under `.cache/replay/45-colored-recognition/`.
 
+The final paper gate requires median pixelwise minimum-channel brightness of at
+least 232 and channel-median spread at most 8. Independent channel medians alone
+can mistake separate cyan, magenta and yellow areas for white paper; a CPU input
+comparison verifies that this mixed-color control keeps the original luminance
+input. The final public replay is retained in `green-joint/`, with the original
+RED untouched. Neighboring colored headings, the dark-bubble control and all 54
+old chart crops retain their previous recognition inputs.
+
 ## Local evidence inventory and limit
 
 Ignored local evidence already includes `.cache/diagnostics/manga-preview/`
