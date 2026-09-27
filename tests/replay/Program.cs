@@ -112,6 +112,34 @@ internal static class Program
                 }
                 Require(dotWidths.Count == 3 && dotWidths.Max() - dotWidths.Min() <= 1,
                     "A single ellipsis glyph in a narrow bubble must render three complete dots of matching width.");
+                var openBubble = fixture with { Background = "open-bubble", Regions = new[] {
+                    fixture.Regions[0] with { Bounds = new Box(275, 120, 21, 86), Translation = "ได้เลย..." } },
+                    TextContainers = new[] { new ContainerFixture("short", new Box(240, 100, 91, 166), true) } };
+                var openPixels = Pixels(BuildFrame(openBubble));
+                Paint(openPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(235, 100, 101, 171),
+                    (x, y) => {
+                        double radius = y < 220 ? Math.Pow((x - 285d) / 45, 2)
+                            : Math.Pow((x - 285d) / 45, 2) + Math.Pow((y - 220d) / 45, 2);
+                        return radius > 1 ? ((byte)90, (byte)120, (byte)150)
+                            : radius >= 0.94 ? ((byte)18, (byte)18, (byte)18)
+                            : (openPixels[(y * fixture.Width + x) * 4 + 2],
+                                openPixels[(y * fixture.Width + x) * 4 + 1], openPixels[(y * fixture.Width + x) * 4]);
+                    });
+                var openFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, openPixels, fixture.Width * 4);
+                openFrame.Freeze();
+                var openResult = Replay(openBubble, openFrame);
+                Verify(openBubble, openResult);
+                var openRendered = Pixels(openResult.Rendered);
+                Require(Math.Abs(openRendered[(126 * fixture.Width + 280) * 4] - 248) <= 1,
+                    "An open narrow bubble must conceal original lettering while fitting the complete caption locally.");
+                for (int y = 100; y < 271; y++)
+                for (int x = 235; x < 336; x++)
+                    if (!openBubble.Regions[0].Bounds.Drawing.Contains(x, y)
+                        && openPixels[(y * fixture.Width + x) * 4] != 248)
+                        Require(openPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(openRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Open bubble placement must preserve its curved border and exterior artwork.");
             }
             if (fixture.Background == "bubble")
             {

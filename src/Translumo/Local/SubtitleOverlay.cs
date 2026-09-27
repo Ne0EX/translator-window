@@ -563,8 +563,8 @@ public sealed class SubtitleOverlay : Window
                 foreach (double widthDip in new[] { source.Width * scaleX, (source.Width + 12) * scaleX,
                     source.Width * scaleX * 1.5, source.Width * scaleX * 2,
                     permittedLocalArea.Width * scaleX, maxWidthDip,
-                    hasContainer ? maxWidthDip * 0.65 : maxWidthDip,
-                    hasContainer ? maxWidthDip * 0.8 : maxWidthDip }
+                    maxWidthDip * 0.65,
+                    maxWidthDip * 0.8 }
                     .Select(width => Math.Min(width, maxWidthDip)).Distinct().Order())
                 {
                     cancellationToken.ThrowIfCancellationRequested();

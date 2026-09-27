@@ -490,3 +490,21 @@ capture; automatic approval review rejected those screenshots. The reader
 cleared Discord, but an overlapping terminal still prevented the next capture.
 These events do not establish current-build navigation or full chapter acceptance.
 Evidence remains local under `.cache/replay/senmanga-acceptance/`.
+
+### Open-edge short reply follow-up
+
+The saved view 20 reply had a qualified lettering cover but no closed container.
+Its width candidates skipped usable space between the narrow detection and the
+widest paragraph. The existing 65% and 80% width candidates now also apply when
+no closed container qualifies. A synthetic open-bubble public replay failed
+before this change and passes afterward, requiring a complete local caption,
+concealed source lettering and preserved curved border/artwork.
+
+The exact ten-region captured-view replay now places the short reply locally at
+13 DIP in a 78×38-image-pixel rectangle; all 3,746 checked nonwhite exterior and
+border pixels remain unchanged. Image metadata is 96 DPI with zoom 1; DIP font
+size and image-pixel bounds are different units. All 14 standard cases pass,
+with repeated medians of 0.17–1.06 ms and a 3.50 ms worst repeat. The actual-view
+repeat median is 2.65 ms, worst 5.74 ms; first layout took 742 ms. Two additional
+bounded width candidates per font are the new-layout cost. This does not qualify
+arbitrary open/textured containers or resolve the longer open-edge apology.
