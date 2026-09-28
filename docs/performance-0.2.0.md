@@ -1071,3 +1071,34 @@ or end-to-end translation latency. Exact logs and binary hashes are in
 `.cache/replay/map-guard-final-comparison/`.
 The complete session lifecycle suite passes, including progressive captions,
 navigation invalidation, changed-view restoration, cancellation and Stop cleanup.
+
+### Live confirmation of the expanded bubble cover — 2026-09-28
+
+The published `6286723` build started a Japanese-to-Thai window-capture session
+against Comet. Its accepted WPF exports record version
+`0.2.0+6286723a64776da32d9e7b7739dad02bd2bd3172` and module ID
+`9a13b731-08f1-4e4b-91ab-c27737174cbe`, at 144 DPI. Private evidence:
+
+- `20260928-005002932-23775f41`: the lower-left passage is recognized completely,
+  has a complete local 36-DIP caption and a solid source cover. Its final line
+  still shifts left; complete text is not sufficient typography acceptance.
+- `20260928-005259939-5259daec`: the matched source confirms a changed view after
+  an upward Comet scroll. The fully visible top oval and upper-left passage have
+  complete local captions at 26 and 33 DIP. The live-evidence checker passes
+  both exact recognized passages and their caption associations.
+- `20260928-005121764-f1248816` was exported before the scroll; it is not
+  post-navigation evidence. Diagnostic snapshots can consume their request
+  marker before a subsequent UI action.
+
+The native Stop button returned the app to **Translation stopped**, with Start
+enabled and Stop disabled; a second accessibility observation confirmed that
+state. The app remains open and idle. Automated lifecycle checks separately
+cover rejection of late session results.
+
+The right passage still loses words during recognition, and two small bottom
+title strips have no detected regions. Cropped passages are not counted as
+full-bubble acceptance cases. Screen-capture exclusion hides the live caption
+window from native screenshots; matched exports establish accepted WPF stills,
+not compositor smoothness, frame cadence or absence of flicker. Export encoding
+is diagnostic work and is excluded from performance measurements. Full-chapter
+acceptance remains open.
