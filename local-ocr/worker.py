@@ -566,6 +566,18 @@ def process_image(image, language, known, detector, get_recognizer, progress=Fal
                 # ponytail: crop median approximates neutral near-white paper;
                 # textured-background failures would need segmentation instead.
                 if np.median(grayscale) >= 232 and paper.max() - paper.min() <= 8:
+                    # Normalize enclosed colored lettering, whose darkest-channel input
+                    # is sensitive to tiny detector-margin changes. Color in the context
+                    # border may be neighboring artwork; retain that crop unchanged.
+                    colored = (crop.max(axis=2) - grayscale > 32) & (grayscale < 220)
+                    x, y, width, height = cv2.boundingRect(np.uint8(colored))
+                    if (width and height and x >= 8 and y >= 8
+                            and x + width <= crop.shape[1] - 8 and y + height <= crop.shape[0] - 8):
+                        # ponytail: the existing paper cutoff cannot locate isolated faint
+                        # lettering; a stronger text mask is needed for those crops.
+                        x, y, width, height = cv2.boundingRect(np.uint8(grayscale < 220))
+                        grayscale = grayscale[max(0, y - 8):min(grayscale.shape[0], y + height + 8),
+                                              max(0, x - 8):min(grayscale.shape[1], x + width + 8)]
                     group.append(Image.fromarray(grayscale))
                 else:
                     group.append(Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)))

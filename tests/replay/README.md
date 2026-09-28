@@ -183,6 +183,38 @@ not live compositor flicker.
 
 ## Complete local processing
 
+### Recognition stability after scrolling
+
+The private full-view regressions in
+`.cache/live-qa/c7-recognition-stability/processing.json` and
+`original-processing.json` use the two native sources
+`20260928-095600537-b3f141a1.source.png` and
+`20260928-095459241-c18f34f5.source.png` at 144 DPI. The independently read
+upper-left passage is `この私に不可能はないの`, in source rectangles
+`[1519,1206,172,223]` and `[1519,981,173,225]` respectively. Each manifest requires
+`caption-complete` for passage `shaded-left`; it supplies no recognized text or
+translation to the processing pipeline.
+
+With those reader-supplied private sources and manifests available, stop the live
+session, run each manifest through the complete-processing command below using
+distinct diagnostics directories, then check the resulting report:
+
+```powershell
+.venv/Scripts/python.exe -X utf8 tests/replay/check-passage-caption.py `
+  .cache/live-qa/c7-recognition-stability/green/c7-scrolled-complete.json `
+  --passage shaded-left
+.venv/Scripts/python.exe -X utf8 tests/replay/check-passage-caption.py `
+  .cache/live-qa/c7-recognition-stability/original-green/c7-original-complete.json `
+  --passage shaded-left
+```
+
+The check requires exact Japanese characters, the complete returned translation,
+local placement and the readable font floor. The original scrolled report must
+remain a recorded failure: it reads `この私にプロ前はないの`. A visually well-fitted
+caption for that wrong sentence does not pass this regression.
+
+### Running the complete-processing replay
+
 Use a local manifest to run a captured image through comic text detection,
 recognition, the local translation worker, and the caption renderer. This mode
 requires the normal local models and runtime. Images and generated reports stay

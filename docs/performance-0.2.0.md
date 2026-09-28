@@ -2027,3 +2027,43 @@ their source/layer/rendered images. The latter source hashes are
 `EBD9060CB5A4D80B4E69F7059A590AC7815CB037AF57F1E585DE87AC6306EA67` and
 `B5E36492F362121C7832BB3ACB3C7A3C5939E5AE141D8519860CEE8DDD59541E`.
 All captures and text inventories remain local. No release acceptance is claimed.
+
+### Consistent recognition margins for colored lettering — 2026-09-28
+
+The complete-processing replay reproduces the live upper-left recognition error.
+Matched source windows from the two captures are byte-identical after a 225-pixel
+vertical shift. Their detected crops differ only by one pixel in width and two
+in height; both pass the existing neutral-paper/minimum-channel qualification.
+Swapping crop geometry transfers the correct/incorrect recognition between
+images. Plain luminance loses the colored words in both. This isolates input
+geometry sensitivity before the recognizer's fixed 224×224 resize.
+
+For neutral-paper crops with colored ink fully inside the existing eight-pixel
+context border, trim excess paper to the complete ink bounds plus that same
+margin. Reuse the existing 220 paper threshold. Black-only text and color touching
+the context border retain their previous inputs. This changes neither model,
+batch size, detected source bounds, nor renderer geometry. Faint isolated ink
+above the paper threshold still needs better segmentation; this is not a general
+recognition guarantee.
+
+A broader trim was rejected: among 109 changed crop pairs across 44 saved views,
+ten recognition results changed, including the visibly correct `専` becoming
+`事`. The final color/context guard changes five crop pairs; their actual model
+results match their original inputs. All 426 crop inputs from 420 regions were
+recreated and checked against the saved input hashes; all 54 existing source
+assertions remain unchanged. This is an OCR-input comparison, not a fresh full
+translation or live-motion pass for all 44 views.
+
+Both exact native views pass the final complete-processing replay and the
+`shaded-left` passage checker: correct Japanese, complete returned Thai, local
+placement at 36/37 DIP. All 13/11 recognized regions reach captions. The original
+scrolled RED report remains a recognition failure. The second view changes only
+the target's recognized text. Matched preparation-only measurements add a median
+8.0 ms over the full 11-region view (20 alternating pairs); no extra inference
+call or model allocation is introduced. These timings exclude inference and UI.
+
+Reproduction is documented in `tests/replay/README.md`. Private RED/GREEN evidence
+is in `.cache/live-qa/c7-recognition-stability/`; crop-isolation and timing evidence
+is in `.cache/live-qa/native-c7-recognition-audit/`; the rejected broad trial and
+final corpus input comparison are in `.cache/replay/neutral-paper-canonical-corpus/`.
+Missed passages and complete native chapter acceptance remain open.
