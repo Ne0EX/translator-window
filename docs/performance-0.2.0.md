@@ -1439,3 +1439,53 @@ cover record and the inspected upper remnant crop are identical. The small
 bottom title still uses a margin, and the right passage has a recognition loss.
 These are follow-up defects, not passing full-page acceptance. This live still
 and successful navigation/Stop do not measure compositor smoothness or flicker.
+
+### Sampled shading inside white bubbles — 2026-09-28
+
+The upper bubble in accepted snapshot `20260928-035344593-96c9e503` had a
+qualified source-text footprint. Its strong black and red letters were covered,
+but pale letter fringes and gray paper remained connected to the uncovered
+exterior. The flood accepted fewer shades than the samples supporting its seed.
+
+For independently qualified Plain lettering on near-white paper, the flood now
+also admits darker shades already present among those supporting samples. The
+maximum extension is four channel levels beyond the previous darker limit.
+Uniformly sampled bubbles keep that limit. A narrow local ridge check preserves
+faint outlines between brighter paper on either side. Existing flood, area,
+component, neighbor and work-budget guards remain in force; no model or extra
+flood pass was added. This is a bounded thin-outline heuristic, not general
+contour segmentation.
+
+Public renderer RED/GREEN checks cover variable paper and source lettering,
+complete local captions, and exact outline/exterior preservation. A first
+candidate failed when a faint outline led to an enclosed exterior floor; that
+failure is retained. The revised guard passes both equal and unequal exterior
+paper shades. All 14 standard cases pass, including their nested controls and
+repeated-view timing checks.
+
+On the exact native source and fixed translations, the upper caption grows
+from 25 to 31 DIP with all five rows occupied. Both independently selected
+source-letter probes receive white coverage. All 563 selected outline, gold
+and ribbon pixels remain unchanged. The lower caption stays at 39 DIP.
+Private evidence, rejected trials and raw logs are in
+`.cache/replay/live-upper-cover/`; publisher images remain local.
+
+The final 44-view comparison retains all 420 caption records, with no new
+margin captions or strict failures. The same 16 existing failures remain.
+Forty-one images are identical; cover pixels change in views 16, 32 and 46.
+Visual review finds 24 changed pixels in total: 18 pale inner-rim pixels in
+view 16, five bubble/hair-stroke fringe pixels in view 32, and one website
+dropdown corner in view 46. Dark line cores remain intact; pixel-perfect
+preservation of every antialiased fringe is not claimed. This small tradeoff
+is retained explicitly in the private comparison audit.
+Repeated native-view samples measured 8.96–10.06 ms for the candidate and
+10.15 ms for the baseline; first layouts measured 1.274–1.287 seconds and
+1.300 seconds respectively. These few process-local observations do not
+establish a speed improvement or compositor smoothness.
+
+The bubble is **not yet seamless**. A gray portrait patch above the detected
+lettering still remains. A separate private public-renderer check at physical
+pixel `[1600,730]` fails on the final build. Lowering the paper threshold further
+was rejected because its flood crossed the open page edge into the browser
+background. Full paper reconstruction, fresh live verification and complete
+chapter acceptance remain open.

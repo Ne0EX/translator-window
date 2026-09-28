@@ -525,6 +525,35 @@ internal static class Program
                         Require(highlightedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(highlightedRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Crossing an interior highlight must preserve the closed bubble outline and exterior artwork.");
+                var variablePaperPixels = Pixels(frame);
+                for (int y = 174; y < 186; y++)
+                for (int x = 220; x < 320; x++)
+                {
+                    double radius = Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2);
+                    if (radius < 0.94 && variablePaperPixels[(y * fixture.Width + x) * 4] == 248)
+                        Set(variablePaperPixels, fixture.Width, x, y, 232, 232, 232);
+                    else if (radius >= 0.94 && radius <= 1)
+                        Set(variablePaperPixels, fixture.Width, x, y, 218, 218, 218);
+                }
+                var variablePaperFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, variablePaperPixels, fixture.Width * 4);
+                variablePaperFrame.Freeze();
+                var variablePaperFixture = fixture with { Id = "variable-white-paper", Background = "variable-white-paper",
+                    WhiteSourceCoverPoints = new[] { new Box(250, 178, 1, 1), new Box(261, 178, 1, 1),
+                        new Box(265, 178, 1, 1), new Box(293, 128, 1, 1) } };
+                var variablePaperResult = Replay(variablePaperFixture, variablePaperFrame);
+                Verify(variablePaperFixture, variablePaperResult);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics, variablePaperFixture,
+                    variablePaperFrame, variablePaperResult, "fixed-text");
+                Require(variablePaperResult.Items.Single(item => item.Kind == "caption").FontSize >= 28,
+                    "A sampled gray patch inside white bubble paper must retain complete, readable local text.");
+                var variablePaperRendered = Pixels(variablePaperResult.Rendered);
+                for (int y = 0; y < fixture.Height; y++)
+                for (int x = 0; x < fixture.Width; x++)
+                    if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                        Require(variablePaperPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(variablePaperRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Covering translucent gray paper must preserve its faint outline and every exterior pixel.");
                 var exposedInkPixels = Pixels(frame);
                 for (int y = 105; y < 300; y++)
                 for (int x = 220; x < 375; x++)
@@ -674,6 +703,36 @@ internal static class Program
                             Require(Math.Abs(weakBoundaryPixels[(y * fixture.Width + x) * 4 + channel]
                                 - weakRendered[(y * fixture.Width + x) * 4 + channel]) <= 1,
                                 "A faint bubble boundary must preserve its outline and adjacent floor within one compositor rounding level.");
+                foreach (byte exteriorPaper in new byte[] { 248, 240 })
+                {
+                    var shadedWeakBoundaryPixels = (byte[])weakBoundaryPixels.Clone();
+                    for (int y = 192; y < 214; y++)
+                    for (int x = 190; x < 220; x++)
+                        if (shadedWeakBoundaryPixels[(y * fixture.Width + x) * 4] == 248)
+                            Set(shadedWeakBoundaryPixels, fixture.Width, x, y, exteriorPaper, exteriorPaper, exteriorPaper);
+                    for (int y = 174; y < 186; y++)
+                    for (int x = 220; x < 320; x++)
+                        if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) < 0.94
+                            && shadedWeakBoundaryPixels[(y * fixture.Width + x) * 4] == 248)
+                            Set(shadedWeakBoundaryPixels, fixture.Width, x, y, 232, 232, 232);
+                    var shadedWeakBoundaryFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                        PixelFormats.Bgra32, null, shadedWeakBoundaryPixels, fixture.Width * 4);
+                    shadedWeakBoundaryFrame.Freeze();
+                    var shadedWeakBoundaryFixture = fixture with { Id = $"shaded-paper-faint-boundary-{exteriorPaper}",
+                        Background = "shaded-paper-faint-boundary" };
+                    var shadedWeakBoundaryResult = Replay(shadedWeakBoundaryFixture, shadedWeakBoundaryFrame);
+                    Verify(shadedWeakBoundaryFixture, shadedWeakBoundaryResult);
+                    if (diagnostics is not null) WriteDiagnostics(diagnostics, shadedWeakBoundaryFixture,
+                        shadedWeakBoundaryFrame, shadedWeakBoundaryResult, "fixed-text");
+                    var shadedWeakBoundaryRendered = Pixels(shadedWeakBoundaryResult.Rendered);
+                    for (int y = 100; y < 305; y++)
+                    for (int x = 185; x < 380; x++)
+                        if (Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.94)
+                            for (int channel = 0; channel < 4; channel++)
+                                Require(Math.Abs(shadedWeakBoundaryPixels[(y * fixture.Width + x) * 4 + channel]
+                                    - shadedWeakBoundaryRendered[(y * fixture.Width + x) * 4 + channel]) <= 1,
+                                    "Observed gray paper must not admit a faint outline or paint the exterior floor beyond it.");
+                }
                 var weakDarkPixels = (byte[])weakBoundaryPixels.Clone();
                 for (int pixel = 0; pixel < weakDarkPixels.Length; pixel += 4)
                     if (weakDarkPixels[pixel] == weakDarkPixels[pixel + 1]

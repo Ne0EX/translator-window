@@ -318,6 +318,12 @@ pixels that should become white paper before captions are drawn. The pale-bubble
 regression also checks every outline and exterior pixel remains unchanged. These
 checks establish the annotated coverage and protection, not general segmentation.
 
+The enclosed-bubble case also includes variable white paper: a gray strip touches
+the outline and crosses source lettering. It must receive solid white coverage
+while the complete local caption and every exterior pixel remain intact. Two
+negative controls combine that shade with a faint outline and different exterior
+paper colors, preventing a wider color range from painting through the border.
+
 ### Visible caption alignment
 
 `check-caption-alignment.py` checks the public fixed-replay report and rendered

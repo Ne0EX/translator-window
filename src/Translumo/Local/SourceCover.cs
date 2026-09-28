@@ -218,6 +218,20 @@ public static class SourceCover
         }
         var (seedX, seedY, fill) = samples[selected];
         int brighterTolerance = 0.299 * fill.R + 0.587 * fill.G + 0.114 * fill.B >= 145 ? 16 : 12;
+        bool whitePaper = fill.B >= 232 && fill.G >= 232 && fill.R >= 232
+            && Math.Max(fill.B, Math.Max(fill.G, fill.R)) - Math.Min(fill.B, Math.Min(fill.G, fill.R)) <= 8;
+        int lowerB = fill.B - 12, lowerG = fill.G - 12, lowerR = fill.R - 12;
+        // Qualified lettering can sit over pale shading. Admit the paper shades that supported
+        // this seed, without lowering the boundary threshold for uniformly sampled bubbles.
+        if (whitePaper && footprint?.Classification == SourceCoverClass.Plain)
+            foreach (var sample in samples)
+                if (Math.Abs(sample.Color.B - fill.B) <= 16
+                    && Math.Abs(sample.Color.G - fill.G) <= 16 && Math.Abs(sample.Color.R - fill.R) <= 16)
+                {
+                    lowerB = Math.Min(lowerB, sample.Color.B);
+                    lowerG = Math.Min(lowerG, sample.Color.G);
+                    lowerR = Math.Min(lowerR, sample.Color.R);
+                }
         int count = search.Width * search.Height;
         if (!reserveFlood(count)) return null;
         var inside = new bool[count];
@@ -342,8 +356,6 @@ public static class SourceCover
             || HasLargeNonTextComponent(holes, search, bounds, ink, cancellationToken, text)) return null;
         // OCR corners can cross the exterior of offset joined bubbles; only the qualified contour is painted.
         // Neutral near-white paper uses white reconstruction; retain the sampled color for qualification and tinted fills.
-        bool whitePaper = fill.B >= 232 && fill.G >= 232 && fill.R >= 232
-            && Math.Max(fill.B, Math.Max(fill.G, fill.R)) - Math.Min(fill.B, Math.Min(fill.G, fill.R)) <= 8;
         var reconstructionFill = whitePaper ? new Pixel(255, 255, 255) : fill;
         var reconstruction = new byte[count * 4];
         for (int i = 0; i < count; i++)
@@ -359,13 +371,29 @@ public static class SourceCover
             if (inside[index] || panelCut.Contains(x, y)) return;
             int offset = y * stride + x * 4;
             if (!MatchesFill(pixels[offset], pixels[offset + 1], pixels[offset + 2])) return;
+            if ((pixels[offset] < fill.B - 12 || pixels[offset + 1] < fill.G - 12 || pixels[offset + 2] < fill.R - 12)
+                && (Ridge(x - 3, y, x + 3, y) || Ridge(x, y - 3, x, y + 3))) return;
             inside[index] = true;
             pending[tail++] = index;
+
+            // ponytail: this detects thin ridges only; wider faint boundaries need contour segmentation.
+            bool Ridge(int ax, int ay, int bx, int by)
+            {
+                if (ax < 0 || ay < 0 || bx >= width || by >= height) return false;
+                int a = ay * stride + ax * 4, b = by * stride + bx * 4;
+                int first = 255, second = 255;
+                for (int channel = 0; channel < 3; channel++)
+                {
+                    first = Math.Min(first, pixels[a + channel] - pixels[offset + channel]);
+                    second = Math.Min(second, pixels[b + channel] - pixels[offset + channel]);
+                }
+                return first > 0 && second > 0 && Math.Max(first, second) > 12;
+            }
         }
         // Keep faint darker outlines closed while allowing brighter highlights inside a pale bubble.
-        bool MatchesFill(byte b, byte g, byte r) => b >= fill.B - 12 && b <= fill.B + brighterTolerance
-            && g >= fill.G - 12 && g <= fill.G + brighterTolerance
-            && r >= fill.R - 12 && r <= fill.R + brighterTolerance;
+        bool MatchesFill(byte b, byte g, byte r) => b >= lowerB && b <= fill.B + brighterTolerance
+            && g >= lowerG && g <= fill.G + brighterTolerance
+            && r >= lowerR && r <= fill.R + brighterTolerance;
         Rectangle FindPanelCut()
         {
             // ponytail: panel cuts need an opposing straight rule and paired endpoints at a clean paper gutter.
