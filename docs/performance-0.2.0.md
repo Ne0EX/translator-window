@@ -1551,3 +1551,48 @@ The recovered lower caption still fails its existing visual alignment check:
 line centers span 24.5 pixels against a 20-pixel limit. That failure, the upper
 gray patch, detection/recognition losses and whole-chapter acceptance stay open.
 Fresh published-build confirmation follows separately.
+
+#### Alignment within the existing safe space
+
+The recovered lower passage's first line still sat right of the other three.
+The contour fitter left each row at its strip midpoint when there was no shared
+legal center. It also retained the first valid staggered vertical candidate,
+even though it had already measured a better candidate lower in the bubble.
+
+Project each occupied row toward a common target while clamping it to its
+existing safe interval. Of the already-tried vertical candidates, retain the
+one with the smallest unavoidable center spread. Font, word measurement,
+search limits and cover masks are unchanged. This adds at most 16 scalar clamps
+per valid candidate, with no extra image search or model work.
+
+The approved public pixel check is RED at 24.5 pixels of line-center spread,
+with a 20-pixel limit and a required 39-DIP font. Projection alone reaches 21
+pixels and remains RED. Choosing the better existing anchor reaches 5 pixels:
+all four rows and the complete translation remain, at 39 DIP, 15 pixels lower.
+The extra space lets the upper caption grow from 30 to 33 DIP, with its complete
+text retained. Independent source-letter cover
+checks and all 14 standard renderer cases pass. Private regression commands are
+documented in `tests/replay/README.md`; sources remain local.
+
+The 44-view comparison retains all 420 caption records and the same 16 existing
+strict failures, with no new margin captions. Twenty-three rendered images are
+identical; 21 contain changes to row placement. Visual audit is recorded with
+the private comparison: all 27 changed captions were inspected, cover records
+are identical, and all 138,451 changed pixels stay inside caption rectangles.
+No new outline collision or artwork concealment was found. A diagnostic that
+excludes stationary resampled outlines reports reduced moving-glyph center
+spread in each of those captions; this is separate from the native regression's
+public pixel assertion. The separate synthetic offset-bubble case still has
+an empty row and large contour-imposed stagger; this change does not promise
+centered lines where the current safe area cannot accommodate them.
+
+The actual-source candidate samples measured 1.235 seconds for its first layout
+and 8.50 ms repeated median (13.15 ms worst), overlapping the earlier samples'
+variation. These are renderer observations, not live navigation measurements.
+Build `207557a` was pushed, published and reopened before this alignment work.
+Comet's requested chapter was verified using accessibility and a reader capture,
+but automatic approval review blocked further app screenshots because its
+capture-excluded window had exposed underlying terminals. Accessibility-only
+input did not move focus; a user clearance request remains pending. Neither
+change has a fresh accepted live caption export yet. The gray cap, recognition
+losses and complete-chapter acceptance remain open.

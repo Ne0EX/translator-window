@@ -1354,7 +1354,7 @@ public sealed class SubtitleOverlay : Window
         // Each line uses a contiguous strip contained by the contour throughout its full height.
         for (int count = minimumLines; count <= Math.Min(16, (bubble.Height - 4) / lineHeight); count++)
         {
-            (string Text, TextEffectCollection Effects, Drawing.Rectangle Bounds)? unaligned = null;
+            (string Text, TextEffectCollection Effects, Drawing.Rectangle Bounds, double Spread)? unaligned = null;
             // Only a valid but staggered joined-bubble fit needs the two alternate vertical anchors.
             for (int anchor = 0; anchor < (unaligned is null ? 1 : 3); anchor++)
             {
@@ -1448,6 +1448,15 @@ public sealed class SubtitleOverlay : Window
                 // Align the paragraph when every occupied strip admits the same center at this font.
                 if (sharedLeft <= sharedRight)
                     Array.Fill(centers, Math.Clamp(bubble.Width / 2d, sharedLeft, sharedRight));
+                else
+                    for (int line = 0; line < lines.Length; line++)
+                    {
+                        if (lines[line].Length == 0) continue;
+                        double slack = Math.Max(0, available[line] - widths[lines[line]]) / (2 * scaleX);
+                        // Use remaining space to minimize stagger without leaving any row's safe strip.
+                        centers[line] = Math.Clamp((sharedLeft + sharedRight) / 2,
+                            centers[line] - slack, centers[line] + slack);
+                    }
                 var effects = new TextEffectCollection();
                 for (int line = 0, start = 0; line < lines.Length; start += lines[line++].Length + 1)
                     if (lines[line].Length > 0 && centers[line] != bubble.Width / 2d)
@@ -1458,7 +1467,9 @@ public sealed class SubtitleOverlay : Window
                 bounds = candidateBounds;
                 if (neighbors.Length > 0 && sharedLeft > sharedRight)
                 {
-                    unaligned ??= (text.Text, effects, candidateBounds);
+                    double spread = sharedLeft - sharedRight;
+                    if (unaligned is null || spread < unaligned.Value.Spread)
+                        unaligned = (text.Text, effects, candidateBounds, spread);
                     continue;
                 }
                 return true;

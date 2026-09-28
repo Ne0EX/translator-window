@@ -357,6 +357,21 @@ that visible stagger without reducing the demonstrated 36-DIP font. The checker
 writes `.alignment.json` beside the report for both RED and GREEN. Publisher
 images and private captured-view manifests remain outside the repository.
 
+The later live source `20260928-043216909-09048ff5` has a separate regression:
+its recovered lower passage must retain all text at 39 DIP while limiting visible
+line-center spread to 20 captured pixels. Its original spread is 24.5 pixels.
+With `.cache/replay/live-upper-cover/lower-fringe.fixture.json` rendered into
+`.cache/replay/lower-fringe/best-anchor-live/`, run:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 tests/replay/check-caption-alignment.py `
+  .cache/replay/lower-fringe/best-anchor-live/lower-source-fringe.json `
+  --region 2 --minimum-font 39 --maximum-center-spread 20
+```
+
+This check covers the local paragraph's visible alignment and completeness;
+the independent source-letter probes remain in the private replay manifest.
+
 ### Complete passage with explicit punctuation allowances
 
 `check-passage-caption.py` uses a complete-processing report's existing
