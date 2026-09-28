@@ -1935,3 +1935,62 @@ This small sample shows no observed layout slowdown. It excludes capture,
 recognition, translation and desktop composition and is not a live frame-rate
 guarantee. Timing inputs and binary hashes are in the private `matched-timing/`
 results alongside the regression evidence.
+
+### Reach the closed bubble after scrolling — 2026-09-28
+
+The next live capture from `a890894` exposes a separate search-extent failure.
+The shaded left bubble's source pixels are unchanged after a 150-pixel scroll,
+but its detected text is ten pixels shorter. Even the target-only reduction
+falls back to an 18-DIP margin caption. A production-path trace shows that the
+alternate seed reaches the search edge; the one allowed enlargement still ends
+four pixels above the actual closed contour. The renderer gives up before it
+can qualify the available reading area.
+
+Allow one additional enlargement, reducing its padding when necessary to stay
+within the existing one-million-pixel search limit. The shared view allowance,
+qualified-lettering requirement, contour, density, artwork and cancellation
+checks remain. Existing successful searches and first-growth budget rejection
+retain their paths. Panel-cut recovery is attempted only before enlargement;
+a leaking cut or exhausted final attempt cannot proceed with a partial flood.
+
+The first wider-search candidate also reached an artwork panel in view 19 and
+whitened 6,340 gray source-art pixels outside the detected lettering. Its rounded
+halftone dots passed the existing near-solid component check. The same component
+walk now rejects repeated compact islands outside all detected text regions.
+It considers neighboring detected passages too: a trace proved that checking
+only the current passage misclassified four lower-passage glyphs in the shared
+bubble as artwork. No additional image scan or model is introduced. Four compact
+marks outside every detection are a conservative texture heuristic; missed
+decorative lettering can still require the source-footprint fallback.
+
+The public shorter-detection regression first fails with original source ink
+left visible. It now passes on both white and pale-gray paper, along with the
+existing four oval combinations, full-text/font requirements and protected
+outline/exterior pixels. All 14 standard renderer cases pass, including the
+open-bottom panel control. Exact native-source replays retain the complete
+caption locally at 37 DIP in original order, 38 with the target first and 37
+with only the two actual shared-bubble passages retained. All original cover
+probes and a separately recorded pink-letter probe pass. The target-only
+reduction now conservatively falls back because it removes the neighboring
+text detection while retaining those glyphs in the image. Its original failing
+assertion is preserved as diagnostic evidence, not reported as a pass.
+
+All 44 corpus renders are byte-identical to the accepted `a890894` baseline:
+420 caption records, 28 strict passes and the same 16 failures. The protected
+halftone dots remain exactly 195 and 197 gray; the prior accepted 4K source is
+also unchanged. Gold-art probes remain exact. These checks establish that this
+patch preserves those accepted views; they do not resolve the known detection,
+recognition and incomplete-caption failures in the corpus.
+
+The matched baseline/candidate/candidate/baseline sample on the exact current
+12-region capture measures first layout at 1,780/1,915 ms before and 1,647/1,804
+ms after. Repeated medians are 10.27/10.30 ms before and 8.71/9.58 ms after;
+candidate worst samples are 13.78/14.78 ms. All repeat-consistency checks pass.
+This sample shows no observed slowdown, not a general speed guarantee. It
+excludes capture, recognition, translation and desktop composition. Newly
+qualifying searches reserve up to one additional one-million-pixel attempt
+within the shared view budget; there is no additional model or VRAM allocation.
+
+Private evidence is under `.cache/live-qa/shaded-left-position-audit/`.
+This corrects a bounded bubble-search failure; complete live chapter acceptance,
+recognition errors and decorative-text quality remain open.

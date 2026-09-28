@@ -440,13 +440,18 @@ targeted pass is not acceptance of the whole view or chapter.
 
 ### Bubble area under small detection changes
 
-The enclosed-bubble case also replays a roomy oval with two slightly different
-text detections, on white paper and with a pale gray cap. Both detections must
+The enclosed-bubble case also replays a roomy oval with three different
+text detections, on white paper and with a pale gray cap. All detections must
 conceal the same original lettering and paper probes, keep complete local text
 at 24 DIP or larger, and preserve every outline and exterior pixel (one RGB
 level of compositor rounding allowed; alpha remains exact). The gray cap retains
 a white path to the top of the closed contour so this checks area qualification,
-not discovery beyond a search edge blocked by shading.
+not discovery beyond a search edge blocked by shading. The shorter detection
+also requires the bounded search to reach the closed contour after its first
+enlargement falls short. The existing open-bottom panel case guards against
+covering the adjacent panel while recovering a larger bubble.
+Four independent round halftone dots outside the lettering must also remain
+unchanged; closure alone does not qualify a panel's artwork as bubble paper.
 
 The exact private regression is under
 `.cache/live-qa/shaded-left-shift-audit/`. Run `run.py --dll <ReplayCheck.dll>
@@ -455,3 +460,13 @@ and detector-box controls. `check-gold.py` replays the chapter-end source and
 checks two independently marked gold-art pixels. It retains the pre-existing
 whole-view recognition failure separately from its artwork verdict. Images and
 manifests remain local.
+
+The later native source in `.cache/live-qa/shaded-left-position-audit/` checks
+the same bubble after scrolling with a shorter detection. Its `run.py` preserves
+the exact full view, target-first and target-only controls. The full view and
+target-first caption must stay local at 34 DIP or larger with all cover probes
+concealed. A separate two-passage reduction retains the lower neighbor's detected
+text. Target-only deliberately removes that metadata, so the artwork guard now
+rejects its unqualified lower glyphs; this retained diagnostic failure is not
+counted as a passing reading case. Separate pink-lettering and protected-halftone
+fixtures retain the initial RED evidence unchanged.

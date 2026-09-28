@@ -181,7 +181,8 @@ public static class SourceCover
             && (long)area.Width * area.Height <= MaxPermittedPixels;
 
     internal static SourceCoverPlan? TryCreateBubble(byte[] pixels, int width, int height,
-        Rectangle text, Rectangle search, SourceCoverPlan? footprint, Func<int, bool> reserveFlood,
+        Rectangle text, Rectangle search, SourceCoverPlan? footprint, IReadOnlyList<Rectangle> letteringAreas,
+        Func<int, bool> reserveFlood,
         CancellationToken cancellationToken)
     {
         if (!IsWithinBudget(search) || !search.Contains(text)) return null;
@@ -238,10 +239,10 @@ public static class SourceCover
         var pending = new int[count];
         int head = 0, tail = 0;
         int minX = seedX, maxX = seedX, minY = seedY, maxY = seedY;
-        bool repairedBoundary = false;
+        int enlargements = 0;
         Rectangle panelCut = Rectangle.Empty;
-        // ponytail: one alternate seed and one boundary repair; other open containers retain the footprint fallback.
-        for (int attempt = 0; attempt < 3; attempt++)
+        // ponytail: one alternate seed and two bounded enlargements; unresolved contours retain the footprint fallback.
+        for (int attempt = 0; attempt < 4; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (attempt != 0)
@@ -273,7 +274,7 @@ public static class SourceCover
                 Visit(index - search.Width, x, y - 1); Visit(index + search.Width, x, y + 1);
             }
             if (escaped is null) break;
-            if (repairedBoundary) return null;
+            if (attempt == 3 || enlargements >= 2 || !panelCut.IsEmpty) return null;
 
             // Matching exterior paper can win the seed tie; retry once outside that escaped component.
             selected = -1;
@@ -296,11 +297,14 @@ public static class SourceCover
 
             // A larger closed component may enclose artwork; require independently qualified lettering.
             if (footprint is null) return null;
-            if (footprint.Classification == SourceCoverClass.Plain
-                && !(panelCut = FindPanelCut()).IsEmpty)
+            if (enlargements == 0 && footprint.Classification == SourceCoverClass.Plain)
             {
-                repairedBoundary = true;
-                continue;
+                var cut = FindPanelCut();
+                if (!cut.IsEmpty)
+                {
+                    panelCut = cut;
+                    continue;
+                }
             }
             var edge = escaped.Value;
             // Reaching the captured image edge cannot be repaired by enlarging the search.
@@ -309,13 +313,21 @@ public static class SourceCover
                 ? Math.Max(text.Left - search.Left, search.Right - text.Right) : 0;
             int extraY = edge.Y == search.Top || edge.Y == search.Bottom - 1
                 ? Math.Max(text.Top - search.Top, search.Bottom - text.Bottom) : 0;
-            var enlarged = search;
-            enlarged.Inflate(extraX, extraY);
-            enlarged.Intersect(new Rectangle(0, 0, width, height));
+            Rectangle enlarged;
+            do
+            {
+                enlarged = search;
+                enlarged.Inflate(extraX, extraY);
+                enlarged.Intersect(new Rectangle(0, 0, width, height));
+                if (IsWithinBudget(enlarged)) break;
+                if (enlargements == 0) return null;
+                extraX /= 2;
+                extraY /= 2;
+            } while (extraX > 0 || extraY > 0);
             if (enlarged == search || !IsWithinBudget(enlarged)) return null;
             search = enlarged;
             count = search.Width * search.Height;
-            repairedBoundary = true;
+            enlargements++;
         }
         var bounds = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
         // Narrow lettering can occupy little of a bubble; also allow a square twice the utterance's length.
@@ -357,7 +369,7 @@ public static class SourceCover
         }
         // Charge the closed contour, not the empty corners of its enclosing rectangle.
         if (covered > maximumArea || ink < 4 || ink > covered * 0.35
-            || HasLargeNonTextComponent(holes, search, bounds, ink, cancellationToken, text)) return null;
+            || HasLargeNonTextComponent(holes, search, bounds, ink, cancellationToken, text, letteringAreas)) return null;
         // OCR corners can cross the exterior of offset joined bubbles; only the qualified contour is painted.
         // Neutral near-white paper uses white reconstruction; retain the sampled color for qualification and tinted fills.
         var reconstructionFill = whitePaper ? new Pixel(255, 255, 255) : fill;
@@ -715,13 +727,15 @@ public static class SourceCover
     }
 
     private static bool HasLargeNonTextComponent(bool[] mask, Rectangle permittedArea,
-        Rectangle textRegion, int candidateCount, CancellationToken cancellationToken, Rectangle? letteringArea = null)
+        Rectangle textRegion, int candidateCount, CancellationToken cancellationToken, Rectangle? letteringArea = null,
+        IReadOnlyList<Rectangle>? letteringAreas = null)
     {
         var seen = new bool[mask.Length];
         var pending = new int[candidateCount];
         int minimumPixels = Math.Max(8, textRegion.Width * textRegion.Height / 5);
         int minimumWidth = Math.Max(4, (textRegion.Width + 2) / 3);
         int minimumHeight = Math.Max(4, (textRegion.Height + 2) / 3);
+        int compactOutsideLettering = 0;
         for (int y = textRegion.Top; y < textRegion.Bottom; y++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -769,9 +783,19 @@ public static class SourceCover
                 bool smallPunctuation = letteringArea is { } source
                     && source.Contains(new Rectangle(minX, minY, componentWidth, componentHeight))
                     && Math.Max(componentWidth, componentHeight) * 6 <= Math.Min(source.Width, source.Height);
-                if (count >= 12 && componentWidth >= 4 && componentHeight >= 4
-                    && componentWidth >= componentHeight * 0.65 && componentHeight >= componentWidth * 0.65
-                    && count >= componentWidth * componentHeight * 0.95 && !smallPunctuation) return true;
+                bool compact = count >= 12 && componentWidth >= 4 && componentHeight >= 4
+                    && componentWidth >= componentHeight * 0.65 && componentHeight >= componentWidth * 0.65;
+                if (compact && count >= componentWidth * componentHeight * 0.95 && !smallPunctuation) return true;
+                // ponytail: four compact islands outside lettering qualify as texture; glyph segmentation is needed for missed decorative marks.
+                if (compact && letteringArea is { } detected && count >= componentWidth * componentHeight * 0.65)
+                {
+                    var component = new Rectangle(minX, minY, componentWidth, componentHeight);
+                    bool isLettering = detected.IntersectsWith(component);
+                    if (!isLettering && letteringAreas is not null)
+                        foreach (var area in letteringAreas)
+                            if (area.IntersectsWith(component)) { isLettering = true; break; }
+                    if (!isLettering && ++compactOutsideLettering >= 4) return true;
+                }
             }
         }
         return false;

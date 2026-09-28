@@ -365,7 +365,7 @@ internal static class Program
                     PixelFormats.Bgra32, null, distantPixels, distantTop.Width * 4);
                 distantFrame.Freeze();
                 foreach (byte capShade in new byte[] { 255, 211 })
-                foreach (int detectedWidth in new[] { 94, 90 })
+                foreach (var (detectedWidth, detectedHeight) in new[] { (94, 140), (90, 140), (110, 100) })
                 {
                     var insetPixels = (byte[])distantPixels.Clone();
                     for (int y = 400; y < 520; y++)
@@ -375,8 +375,8 @@ internal static class Program
                     var insetFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
                         PixelFormats.Bgra32, null, insetPixels, distantTop.Width * 4);
                     insetFrame.Freeze();
-                    var insetDetection = distantTop with { Id = $"roomy-oval-detection-{detectedWidth}-paper-{capShade}",
-                        Regions = new[] { distantTop.Regions[0] with { Bounds = new Box(550, 620, detectedWidth, 140) } },
+                    var insetDetection = distantTop with { Id = $"roomy-oval-detection-{detectedWidth}x{detectedHeight}-paper-{capShade}",
+                        Regions = new[] { distantTop.Regions[0] with { Bounds = new Box(550, 620, detectedWidth, detectedHeight) } },
                         WhiteSourceCoverPoints = new[] { new Box(600, 450, 1, 1), new Box(598, 475, 1, 1),
                             new Box(552, 750, 1, 1) } };
                     var insetResult = Replay(insetDetection, insetFrame);
@@ -486,6 +486,27 @@ internal static class Program
                         Require(dottedPixels.AsSpan((y * distantTop.Width + x) * 4, 4)
                             .SequenceEqual(dottedRendered.AsSpan((y * distantTop.Width + x) * 4, 4)),
                             "Textured paper reconstruction must preserve pending text and exterior artwork.");
+                var roundDottedPixels = (byte[])distantPixels.Clone();
+                foreach (int dotX in new[] { 520, 550, 640, 670 })
+                    Paint(roundDottedPixels, distantTop.Width, distantTop.Height,
+                        new Drawing.Rectangle(dotX, 540, 10, 10), (x, y) =>
+                            Math.Pow(x - dotX - 4.5, 2) + Math.Pow(y - 544.5, 2) <= 25
+                                ? ((byte)195, (byte)195, (byte)195)
+                                : ((byte)255, (byte)255, (byte)255));
+                var roundDottedFrame = BitmapSource.Create(distantTop.Width, distantTop.Height,
+                    distantTop.Dpi, distantTop.Dpi, PixelFormats.Bgra32, null,
+                    roundDottedPixels, distantTop.Width * 4);
+                roundDottedFrame.Freeze();
+                var roundDottedFixture = distantWithPending with {
+                    Id = "round-halftone-art-outside-text", WhiteSourceCoverPoints = null };
+                var roundDottedResult = Replay(roundDottedFixture, roundDottedFrame,
+                    allowMissing: true, allowLayoutRejection: true);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics,
+                    roundDottedFixture, roundDottedFrame, roundDottedResult, "fixed-text");
+                var roundDottedRendered = Pixels(roundDottedResult.Rendered);
+                foreach (int dotX in new[] { 520, 550, 640, 670 })
+                    Require(roundDottedRendered[(544 * distantTop.Width + dotX + 4) * 4] == 195,
+                        "A closed area around text must preserve repeated round halftone artwork outside the lettering.");
                 var diagramPixels = (byte[])distantPixels.Clone();
                 var diagramPath = new[] { new Drawing.Point(525, 519), new Drawing.Point(556, 510),
                     new Drawing.Point(564, 542), new Drawing.Point(590, 546), new Drawing.Point(585, 585),

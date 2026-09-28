@@ -1312,7 +1312,9 @@ public sealed class SubtitleOverlay : Window
                 var footprint = SourceCover.TryCreate(pixels, capture.Width, capture.Height, capture.Width * 4,
                     localSource, localMask, cancellationToken);
                 plan = SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
-                    localSource, search, footprint, workBudget.TryBubble, cancellationToken);
+                    localSource, search, footprint, Array.ConvertAll(sources, area => {
+                        area.Offset(-capture.X, -capture.Y); return area;
+                    }), workBudget.TryBubble, cancellationToken);
                 if (plan is not null && footprint is not null)
                     plan = plan.IncludeFootprint(footprint, localSource, workBudget.SampleBackgroundRow, cancellationToken);
                 plan ??= footprint;
