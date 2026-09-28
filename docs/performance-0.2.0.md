@@ -1853,3 +1853,34 @@ also whitens 38 pale yellow-fringe pixels just below the symbol detection
 the symbol cover. This existing contour-quality limit remains open, along with
 incomplete recognition of the expressive symbols. Passing cover probes does
 not establish complete native artwork preservation.
+
+### Joined passages through a narrow bubble neck — 2026-09-28
+
+Fresh complete processing reproduced a missing lower sentence in the native
+right bubble. The recognizer received all source pixels but read only the upper
+passage. An exact-input whole-versus-split comparison recovered both sentences
+when split at a clear row. The existing separator search rejected the gap because
+the bubble's boundary ink interrupted it for longer than its white flank.
+
+The separator search now also accepts a bounded neck: clear rows on both sides,
+enough source space above and below, and all intervening ink connected to the
+left or right crop boundary within width/8 (a 6-pixel minimum). Ordinary white separators
+and previously accepted short borders retain their rules. At most two crops are
+read; their text is joined into the original region before translation. No model,
+dependency, region identity or renderer change is introduced.
+
+The exact recognizer comparison recovers both full sentences in the native
+before/after views. The six other control inputs retain identical crops and
+recognition. Full processing of the unchanged 3840x2160 source preserves the
+detector bounds and displays the complete longer Thai caption locally at 27 DIP;
+the independent lower-left control stays exact and local at 37 DIP. The strict
+replay still reports the full-width `！` versus ASCII `!` mismatch. The existing
+public passage checker passes with only those two punctuation forms allowed;
+all other source characters and the complete returned translation must match.
+
+This adds one recognition crop for each newly qualifying joined passage. The
+20-crop diagnostic batch took 0.72 seconds with the existing CUDA recognizer;
+that single sample is not a latency comparison or a live-performance guarantee.
+Evidence, source/model hashes and RED/GREEN reports remain private under
+`.cache/live-qa/native3a46-recognition-audit/`. Fresh live recognition, remaining
+heading/small-text omissions, cover fringes and whole-chapter acceptance stay open.

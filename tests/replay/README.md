@@ -417,3 +417,23 @@ complete returned Thai locally at 28 DIP. The strict full-width `！` versus ASC
 `!` mismatch still reports `recognition-error`; the targeted assertion records the
 explicit allowance. Private `red-run.json` and `green-run.json` preserve the whole
 harness exit status and worker provenance. Source images and manifests remain local.
+
+The later 4K joined-right regression uses
+`.cache/live-qa/native3a46-recognition-audit/processing.json`, preserving the
+complete native capture, detector region `[2283,1180,172,633]` and the same source
+literal. Run `--processing` with a fresh diagnostics directory, then:
+
+```powershell
+.\.venv\Scripts\python.exe tests/replay/check-passage-caption.py `
+  .cache/live-qa/native3a46-recognition-audit/green-edge-neck/native3a46-joined-right.json `
+  --passage joined-right --ignore-punctuation '！!'
+.\.venv\Scripts\python.exe tests/replay/check-passage-caption.py `
+  .cache/live-qa/native3a46-recognition-audit/green-edge-neck/native3a46-joined-right.json `
+  --passage lower-left
+```
+
+RED loses the entire lower sentence. GREEN preserves every source character
+apart from the explicitly allowed exclamation forms, and displays the complete
+Thai translation locally at 27 DIP. The lower-left control remains exact and
+local at 37 DIP. The whole replay retains its strict punctuation failure; this
+targeted pass is not acceptance of the whole view or chapter.

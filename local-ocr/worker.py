@@ -510,12 +510,18 @@ def recognition_crops(image, region):
         if not gaps:
             for (start, first_stop), (second_start, stop) in zip(spans, spans[1:]):
                 flank = min(first_stop - start, stop - second_start)
-                if (flank < minimum / 2 or second_start - first_stop > flank
+                bridge = second_start - first_stop
+                short_border = flank >= minimum / 2 and bridge <= flank
+                narrow_neck = (flank >= max(12, width / 12) and stop - start >= minimum
+                               and bridge <= minimum)
+                if (not (short_border or narrow_neck)
                         or start < width / 2 or height - stop < width / 2):
                     continue
                 _, _, stats, _ = cv2.connectedComponentsWithStats(
                     np.uint8(gray[first_stop:second_start] < 220))
-                if all((sx == 0 or sx + sw == width) and sw <= flank
+                # A taller neck needs a narrow edge strip: width/8 with a 6-pixel floor.
+                edge_width = flank if short_border else minimum / 2
+                if all((sx == 0 or sx + sw == width) and sw <= edge_width
                        for sx, _, sw, _, _ in stats[1:]):
                     gaps.append((stop - start, start, stop))
         if gaps:
