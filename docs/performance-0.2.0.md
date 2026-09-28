@@ -1800,3 +1800,48 @@ shaded left caption still falls to 18 DIP in this capture. CPU crop inspection
 confirms the lower text is retained in the recognition crop; the existing joined
 bubble splitter rejects this view's wider neck. Fresh model execution is needed
 to establish that cause. Full-chapter and fresh live acceptance remain open.
+
+### Bubble qualification across large captured views — 2026-09-28
+
+The unchanged 3840x2160 native source reproduced the shaded-left failure:
+region 7 rendered at 18 DIP with a small source footprint in its original order,
+but at 35 DIP with the complete bubble cover when moved first. A five-region
+reduction retained the failure. Making the same region arrive progressively
+restored its cover and failed the existing fresh/progressive parity check.
+The trace identified the final search reservation: 4,443,110 pixels exceeded
+the fixed 4,000,000 allowance. No contour or neighbor guard rejected that attempt.
+
+The shared bubble-search allowance now scales with captured pixel area, with a
+4M floor and 32M ceiling. The per-search 1M limit, detected-cover limit, contour,
+artwork and neighbor checks, cancellation and background-sampling limit remain.
+This permits more bounded work on large views; extremely dense views can still
+exhaust the allowance and retain footprint fallback. No model or dependency was
+added, and no additional model VRAM is used.
+
+The public regression uses six copies of the existing closed-bubble source in
+a 4K captured view. The old renderer leaves later source-ink probes visible;
+the updated renderer covers every probe, keeps all complete local captions at
+28 DIP or larger in both result orders, and preserves borders and exterior
+pixels. That composite edge comparison allows one RGB level of WPF rounding
+(observed 18 to 19); alpha and the white source-ink probes remain exact.
+All 14 standard renderer cases pass. The exact native pair passes all four
+cover probes and retains the upper caption at 35 DIP in both orders. The reduced
+fresh/progressive parity check also passes. All 44 existing corpus inputs are
+below 4M pixels, so their numeric allowance is unchanged; that corpus was not
+rerun for this policy-only change.
+
+Matched baseline/candidate/candidate/baseline replay of the twelve-region view
+measured first layouts at 1,419-1,478 ms versus 1,437-1,445 ms. Repeated medians
+were 9.31-11.18 ms versus 8.77-13.73 ms; one candidate sample reached 18.98 ms.
+Heading completion increased from 189-205 ms to 274-296 ms, about 85-91 ms extra
+for the restored cover and layout. These exclude capture, OCR, translation and
+desktop composition. Private evidence is under
+`.cache/live-qa/native3a46-scroll-audit/upper-left-audit/`.
+
+Separately, fresh complete processing confirms that the joined-right passage
+still loses its lower sentence during recognition. An exact-input recognizer
+comparison recovers both sentences when split at the observed clear gap; the
+whole crop reproduces the loss. This is diagnostic evidence, not an implemented
+OCR fix. Its source hashes, model hashes and control outputs remain private in
+`.cache/live-qa/native3a46-recognition-audit/`. Live reading acceptance and the
+full chapter remain open.

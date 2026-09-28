@@ -43,8 +43,16 @@ public sealed class SubtitleOverlay : Window
         private int placementChecks;
         private long backgroundPixelSamples;
         private long bubblePixels;
+        private readonly long maxBubblePixels;
 
-        public bool TryBubble(int pixels) => (bubblePixels += pixels) <= MaxCoverPixels;
+        public RenderWorkBudget(long capturePixels)
+        {
+            // A large captured view needs room to qualify all its bubbles, including later results.
+            // ponytail: one view's pixels with a fixed ceiling; denser views retain footprint fallback.
+            maxBubblePixels = Math.Clamp(capturePixels, MaxCoverPixels, MaxBackgroundPixelSamples);
+        }
+
+        public bool TryBubble(int pixels) => (bubblePixels += pixels) <= maxBubblePixels;
 
         public void CheckPlacement()
         {
@@ -372,7 +380,7 @@ public sealed class SubtitleOverlay : Window
         var visuals = new List<(Border Border, Drawing.Rectangle Bounds)>();
         var marginIndices = new List<int>();
         var sourceCovers = new (Brush Patch, Drawing.Rectangle Bounds, Brush Caption, Color Background, SourceCoverPlan? Plan)?[masks.Length];
-        var workBudget = new RenderWorkBudget();
+        var workBudget = new RenderWorkBudget((long)captureBounds.Width * captureBounds.Height);
         var displayStyles = new DisplayLettering?[sources.Length];
 
         if (style == SubtitleStyle.Overwrite && backgroundPixels is not null

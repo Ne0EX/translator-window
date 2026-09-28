@@ -280,6 +280,55 @@ internal static class Program
                 Require(largeRendered[(290 * largeBubble.Width + 949) * 4] == 255,
                     "A large captured view must still cover source lettering throughout its closed bubble.");
                 Verify(largeBubble, largeResult);
+                // The same closed bubbles across a 4K view need their full interiors regardless of result order.
+                var wideBubbles = largeBubble with { Id = "wide-capture-closed-bubbles", Width = 3840, Height = 2160,
+                    Regions = Enumerable.Range(0, 6).Select(i => largeBubble.Regions[0] with {
+                        Id = i.ToString(), Bounds = new Box(275 + i * 600, 355, 150, 622) }).ToArray(),
+                    TextContainers = Enumerable.Range(0, 6).Select(i => new ContainerFixture(i.ToString(),
+                        new Box(200 + i * 600, 250, 300, 820), true)).ToArray(),
+                    IntendedPassages = Enumerable.Range(0, 6).Select(i => new PassageFixture(i.ToString(),
+                        largeBubble.Regions[0].RecognizedText, i.ToString(), "caption-complete")).ToArray(),
+                    WhiteSourceCoverPoints = Enumerable.Range(0, 6)
+                        .Select(i => new Box(349 + i * 600, 290, 1, 1)).ToArray() };
+                var widePixels = new byte[wideBubbles.Width * wideBubbles.Height * 4];
+                Paint(widePixels, wideBubbles.Width, wideBubbles.Height,
+                    new Drawing.Rectangle(0, 0, wideBubbles.Width, wideBubbles.Height),
+                    (_, _) => ((byte)90, (byte)120, (byte)150));
+                for (int i = 0; i < 6; i++)
+                for (int y = 0; y < largeBubble.Height; y++)
+                    largePixels.AsSpan((y * largeBubble.Width + 650) * 4, 600 * 4)
+                        .CopyTo(widePixels.AsSpan((y * wideBubbles.Width + 50 + i * 600) * 4));
+                var wideBubblesFrame = BitmapSource.Create(wideBubbles.Width, wideBubbles.Height,
+                    wideBubbles.Dpi, wideBubbles.Dpi, PixelFormats.Bgra32, null, widePixels, wideBubbles.Width * 4);
+                wideBubblesFrame.Freeze();
+                var wideBubblesResult = Replay(wideBubbles, wideBubblesFrame);
+                Verify(wideBubbles, wideBubblesResult);
+                Require(wideBubblesResult.Items.Where(item => item.Kind == "caption").All(item => item.FontSize >= 28),
+                    "Every roomy bubble in a large captured view must retain a readable local caption.");
+                var wideReversed = wideBubbles with { Regions = wideBubbles.Regions.Reverse().ToArray() };
+                var wideReversedResult = Replay(wideReversed, wideBubblesFrame);
+                Verify(wideReversed, wideReversedResult);
+                Require(wideReversedResult.Items.Where(item => item.Kind == "caption").All(item => item.FontSize >= 28),
+                    "Reversing results must retain readable text in every roomy bubble.");
+                var wideRendered = Pixels(wideBubblesResult.Rendered);
+                var wideReversedPixels = Pixels(wideReversedResult.Rendered);
+                for (int y = 0; y < wideBubbles.Height; y++)
+                for (int x = 0; x < wideBubbles.Width; x++)
+                {
+                    int center = 350 + Math.Min(x / 600, 5) * 600;
+                    if (Math.Pow((x - center) / 150d, 2) + Math.Pow((y - 660d) / 410, 2) < 0.97) continue;
+                    int widePixelOffset = (y * wideBubbles.Width + x) * 4;
+                    // Fractional device-to-DIP brush bounds can round an edge channel by one level.
+                    for (int channel = 0; channel < 4; channel++)
+                    if (Math.Abs(widePixels[widePixelOffset + channel] - wideRendered[widePixelOffset + channel]) > (channel == 3 ? 0 : 1)
+                        || Math.Abs(widePixels[widePixelOffset + channel] - wideReversedPixels[widePixelOffset + channel]) > (channel == 3 ? 0 : 1))
+                        Require(false,
+                        $"Large-view bubble covers must preserve every outline and exterior pixel in either result order at {x},{y}: "
+                        + string.Join(",", widePixels.Skip(widePixelOffset).Take(4)) + " -> "
+                        + string.Join(",", wideRendered.Skip(widePixelOffset).Take(4)) + " / "
+                        + string.Join(",", wideReversedPixels.Skip(widePixelOffset).Take(4)));
+                }
+                if (diagnostics is not null) WriteDiagnostics(diagnostics, wideBubbles, wideBubblesFrame, wideBubblesResult, "fixed-text");
                 for (int y = 0; y < largeBubble.Height; y++)
                 for (int x = 0; x < largeBubble.Width; x++)
                     if (Math.Pow((x - 950d) / 150, 2) + Math.Pow((y - 660d) / 410, 2) >= 0.97)

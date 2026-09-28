@@ -18,6 +18,11 @@ fill inside an enclosed bubble (including pale lettering outside its detection),
 unchanged bubble outlines and exterior pixels, preservation of a second passage
 awaiting translation, light captions on dark fills, and dominant source-ink color
 when the Auto preset is selected. These checks use the public renderer only.
+A 4K view with six closed bubbles requires complete source covers and local
+captions of at least 28 DIP in either result order. Its exterior and outlines
+allow at most one RGB level of compositing roundoff; alpha and the white
+source-ink probes remain exact. This guards against later bubbles losing their
+usable area because of a view-size-independent shared work allowance.
 An overlapping, ready qualified heading must not discard the neighboring bubble.
 While the heading is pending, its entire detected rectangle stays unchanged;
 the synthetic reader includes a gray gutter for that conservative fallback.
