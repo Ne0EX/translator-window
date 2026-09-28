@@ -323,7 +323,8 @@ public static class SourceCover
         long maximumArea = Math.Max(96 * 96,
             Math.Max((long)text.Width * text.Height * 8, letteringLength * letteringLength * 4));
         if (!bounds.Contains(text) || tail < text.Width * text.Height / 2
-            || (long)bounds.Width * bounds.Height > maximumArea) return null;
+            // Tinted artwork still needs the conservative extent limit; it is not white bubble paper.
+            || !whitePaper && (long)bounds.Width * bounds.Height > maximumArea) return null;
 
         // Flood the complement from outside: disconnected holes are lettering, the connected outline is preserved.
         if (whitePaper && footprint?.Classification == SourceCoverClass.Plain) RecoverPaper();
@@ -354,7 +355,8 @@ public static class SourceCover
             inside[index] = !exterior[index];
             if (inside[index]) covered++;
         }
-        if (ink < 4 || ink > covered * 0.35
+        // Charge the closed contour, not the empty corners of its enclosing rectangle.
+        if (covered > maximumArea || ink < 4 || ink > covered * 0.35
             || HasLargeNonTextComponent(holes, search, bounds, ink, cancellationToken, text)) return null;
         // OCR corners can cross the exterior of offset joined bubbles; only the qualified contour is painted.
         // Neutral near-white paper uses white reconstruction; retain the sampled color for qualification and tinted fills.
@@ -397,8 +399,8 @@ public static class SourceCover
         void RecoverPaper()
         {
             // ponytail: recover light neutral shading only; stronger textures need explicit container segmentation.
-            // Stay inside the already reserved search and existing area limit. The normal
-            // hole, density and artwork checks below still validate the complete cover.
+            // Stay inside the reserved search. The final covered-pixel, density and
+            // artwork checks below still validate the complete cover.
             var states = new byte[count];
             var ridges = new sbyte[count];
             for (int seed = 0; seed < count; seed++)
@@ -424,8 +426,7 @@ public static class SourceCover
                     Add(index - 1); Add(index + 1); Add(index - search.Width); Add(index + search.Width);
                 }
                 // Tiny neutral islands can be artwork's antialias fringe, not paper shading.
-                if (open || tail < 16 && !touchesText
-                    || (long)(right - left + 1) * (bottom - top + 1) > maximumArea) continue;
+                if (open || tail < 16 && !touchesText) continue;
                 for (int n = 0; n < tail; n++) inside[pending[n]] = true;
                 minX = left; maxX = right; minY = top; maxY = bottom;
 

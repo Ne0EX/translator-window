@@ -437,3 +437,21 @@ apart from the explicitly allowed exclamation forms, and displays the complete
 Thai translation locally at 27 DIP. The lower-left control remains exact and
 local at 37 DIP. The whole replay retains its strict punctuation failure; this
 targeted pass is not acceptance of the whole view or chapter.
+
+### Bubble area under small detection changes
+
+The enclosed-bubble case also replays a roomy oval with two slightly different
+text detections, on white paper and with a pale gray cap. Both detections must
+conceal the same original lettering and paper probes, keep complete local text
+at 24 DIP or larger, and preserve every outline and exterior pixel (one RGB
+level of compositor rounding allowed; alpha remains exact). The gray cap retains
+a white path to the top of the closed contour so this checks area qualification,
+not discovery beyond a search edge blocked by shading.
+
+The exact private regression is under
+`.cache/live-qa/shaded-left-shift-audit/`. Run `run.py --dll <ReplayCheck.dll>
+--output <new-folder> --cover-probes` for the unchanged full capture, result-order
+and detector-box controls. `check-gold.py` replays the chapter-end source and
+checks two independently marked gold-art pixels. It retains the pre-existing
+whole-view recognition failure separately from its artwork verdict. Images and
+manifests remain local.

@@ -364,6 +364,39 @@ internal static class Program
                 var distantFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
                     PixelFormats.Bgra32, null, distantPixels, distantTop.Width * 4);
                 distantFrame.Freeze();
+                foreach (byte capShade in new byte[] { 255, 211 })
+                foreach (int detectedWidth in new[] { 94, 90 })
+                {
+                    var insetPixels = (byte[])distantPixels.Clone();
+                    for (int y = 400; y < 520; y++)
+                    for (int x = 590; x < 720; x++)
+                        if (insetPixels[(y * distantTop.Width + x) * 4] == 255)
+                            Set(insetPixels, distantTop.Width, x, y, capShade, capShade, capShade);
+                    var insetFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
+                        PixelFormats.Bgra32, null, insetPixels, distantTop.Width * 4);
+                    insetFrame.Freeze();
+                    var insetDetection = distantTop with { Id = $"roomy-oval-detection-{detectedWidth}-paper-{capShade}",
+                        Regions = new[] { distantTop.Regions[0] with { Bounds = new Box(550, 620, detectedWidth, 140) } },
+                        WhiteSourceCoverPoints = new[] { new Box(600, 450, 1, 1), new Box(598, 475, 1, 1),
+                            new Box(552, 750, 1, 1) } };
+                    var insetResult = Replay(insetDetection, insetFrame);
+                    if (diagnostics is not null) WriteDiagnostics(diagnostics,
+                        insetDetection, insetFrame, insetResult, "fixed-text");
+                    Verify(insetDetection, insetResult);
+                    Require(insetResult.Items.Single(item => item.Kind == "caption").FontSize >= 24,
+                        "Small detection changes must retain full use of the same roomy oval bubble.");
+                    var insetRendered = Pixels(insetResult.Rendered);
+                    for (int y = 0; y < distantTop.Height; y++)
+                    for (int x = 0; x < distantTop.Width; x++)
+                    {
+                        if (Math.Pow((x - 600d) / 120, 2) + Math.Pow((y - 620d) / 220, 2) < 0.97) continue;
+                        int insetPixelOffset = (y * distantTop.Width + x) * 4;
+                        for (int channel = 0; channel < 4; channel++)
+                            Require(Math.Abs(insetPixels[insetPixelOffset + channel] - insetRendered[insetPixelOffset + channel])
+                                <= (channel == 3 ? 0 : 1),
+                                "Using an oval bubble's full area must preserve its outline and exterior pixels.");
+                    }
+                }
                 var distantWithPending = distantTop with { Regions = distantTop.Regions.Concat(new[] {
                     new RegionFixture("pending", distantPending, "pending", "") }).ToArray() };
                 var distantResult = Replay(distantWithPending, distantFrame, allowMissing: true);

@@ -1884,3 +1884,54 @@ that single sample is not a latency comparison or a live-performance guarantee.
 Evidence, source/model hashes and RED/GREEN reports remain private under
 `.cache/live-qa/native3a46-recognition-audit/`. Fresh live recognition, remaining
 heading/small-text omissions, cover fringes and whole-chapter acceptance stay open.
+
+### Closed bubble area under small detection changes — 2026-09-28
+
+A live Comet capture from `5b73268` verifies both joined-right sentences in a
+complete local 27-DIP caption. The same capture exposes another fitting failure:
+the shaded left bubble falls from 35 to 18 DIP when its detected text rectangle
+becomes four pixels shorter. Its entire 405x753 source crop is pixel-identical
+to the preceding view after accounting for scrolling. The rectangle enclosing
+the bubble exceeds the text-derived area allowance by only 0.7%; the actual
+bubble interior fits. The target-only reduction still fails, ruling out shared
+budget exhaustion for this case.
+
+White-paper bubbles now apply that allowance to the covered contour pixels,
+after recovering qualified pale paper. Empty exterior corners no longer count
+against usable reading space. The recovery step uses the same final area check.
+Search, boundary, texture, ink-density, artwork and cancellation guards remain.
+Tinted regions retain the original conservative extent check: an unrestricted
+trial recolored a gold sparkle near the chapter-end copyright label. Independent
+pixel probes reproduce that failure and verify exact preservation with the
+retained guard. This change does not add a model or model VRAM.
+
+The public oval regression first fails with a slightly narrower text detection;
+the shaded variant separately catches the remaining recovery-area guard.
+All four width/paper combinations now pass, including complete local text at
+24 DIP or larger, exact white cover probes, and preserved outline/exterior
+pixels (one RGB level of compositor rounding allowed). All 14 standard renderer
+cases pass. The exact native-source replays pass all cover probes and retain
+complete local captions at 37 DIP in original order, 38 with the target first,
+53 for the target-only reduction, and 35 with the prior detector rectangle.
+The reduced case is diagnostic, not a substitute for the original 12-region view.
+
+The unchanged 44-view corpus retains 420 caption records, 28 strict passes and
+the same 16 strict failures, without new margin fallbacks or missing captions.
+These failures still include recognition/detection defects; this comparison
+does not establish complete chapter translation. Private source evidence,
+RED/GREEN reports and artwork probes remain under
+`.cache/live-qa/shaded-left-shift-audit/`. A pre-existing gray fringe in the prior
+detector-box control remains; full live reading acceptance is still open.
+
+Thirty-nine corpus images are unchanged. Five retain the inspected bubble-area
+improvements; the chapter-end image is completely identical to the accepted
+baseline, including the gold artwork. Outside detected text and captions, no
+retained dark or chromatic source pixel changes by more than one RGB level.
+
+Matched baseline/candidate/candidate/baseline runs of the exact 12-region view
+measure first layout at 1,645-1,843 ms versus 1,565-1,639 ms. Repeated-view medians
+are 9.00-12.41 ms versus 9.12-9.33 ms; candidate worst samples are 14.87-14.98 ms.
+This small sample shows no observed layout slowdown. It excludes capture,
+recognition, translation and desktop composition and is not a live frame-rate
+guarantee. Timing inputs and binary hashes are in the private `matched-timing/`
+results alongside the regression evidence.
