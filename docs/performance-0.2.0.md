@@ -1994,3 +1994,36 @@ within the shared view budget; there is no additional model or VRAM allocation.
 Private evidence is under `.cache/live-qa/shaded-left-position-audit/`.
 This corrects a bounded bubble-search failure; complete live chapter acceptance,
 recognition errors and decorative-text quality remain open.
+
+### Live verification of the bounded search — 2026-09-28
+
+Reopened published `c7d0f69` and started a native Comet translation session.
+The app exported accepted caption layers for the final monochrome view and two
+color-page scroll positions. Both color captures have matching source/accepted
+generations (141 and 196), full 3840×2160 source bounds at 144 DPI, a full canvas
+clip and a visible, opaque caption layer. These are actual application results,
+not renderer replays. Native Stop returned the app to its idle state with Start
+enabled and Stop disabled; the updated app remains open.
+
+At the two color-page positions, the confession stays local at 26 DIP, the
+joined right passage at 30 DIP, and the lower-left passage at 36/37 DIP. The
+previously failing shaded upper-left bubble stays local at 36/33 DIP and its
+source lettering is concealed. The smaller font in the second capture accompanies
+a different recognition/translation result, so these captures do not establish
+identical-caption placement stability or smooth animation.
+
+The second capture exposes a content failure: the correct recognized passage
+`この私に不可能はないの` becomes `この私にプロ前はないの` after scrolling.
+Its returned translation contains Japanese `プロ`; the existing Thai sanitization
+removes those characters. The caption fits its bubble but does not preserve the
+source meaning. Heading recognition also varies, and the small promotional title
+and reading button remain untranslated. These failures prevent whole-chapter
+acceptance. They require detector/recognizer/translation work; this live evidence
+does not justify another general relaxation of the bubble renderer.
+
+Private evidence: `.cache/live-qa/20260928-094946589-ac86f9d8.json`,
+`20260928-095459241-c18f34f5.json` and `20260928-095600537-b3f141a1.json`, with
+their source/layer/rendered images. The latter source hashes are
+`EBD9060CB5A4D80B4E69F7059A590AC7815CB037AF57F1E585DE87AC6306EA67` and
+`B5E36492F362121C7832BB3ACB3C7A3C5939E5AE141D8519860CEE8DDD59541E`.
+All captures and text inventories remain local. No release acceptance is claimed.
