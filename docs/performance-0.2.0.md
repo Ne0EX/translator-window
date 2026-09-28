@@ -1487,5 +1487,24 @@ The bubble is **not yet seamless**. A gray portrait patch above the detected
 lettering still remains. A separate private public-renderer check at physical
 pixel `[1600,730]` fails on the final build. Lowering the paper threshold further
 was rejected because its flood crossed the open page edge into the browser
-background. Full paper reconstruction, fresh live verification and complete
-chapter acceptance remain open.
+background. Full paper reconstruction and complete chapter acceptance remain open.
+
+#### Fresh live input and remaining lower fallback
+
+Published `0.2.0+fe8a93aaf37d22b25f01ec21e89a0c4281921d92` starts normally
+against fullscreen Comet and exports accepted generation 2 in
+`20260928-043216909-09048ff5`. The source is 3840×2159, the desktop layer is
+3840×2160, and both use 144 DPI. The artifact checker passes both independently
+read left passages and their complete returned captions. Native Stop reports
+`Translation stopped.` with Start enabled and Stop disabled. The app remains
+open and idle. This check does not establish scrolling cadence or flicker.
+
+The fresh detector output differs slightly from the earlier capture. The upper
+caption is local at 37 DIP; the lower opponent passage is an 18-DIP margin caption
+and has no source cover. Replaying this exact new input on both the prior `d5f7bd1`
+renderer and the candidate produces identical images and caption records. Thus
+neither the larger upper caption nor the lower fallback is attributed to this
+change. The lower source rectangle changes from `[1363,1115,184,241]` to
+`[1362,1115,184,244]`; this input sensitivity needs diagnosis. Right-passage
+recognition loss, a hallucinated symbol passage and missed small titles also
+remain. This is not whole-view acceptance.
