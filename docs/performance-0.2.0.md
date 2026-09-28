@@ -1102,3 +1102,39 @@ window from native screenshots; matched exports establish accepted WPF stills,
 not compositor smoothness, frame cadence or absence of flicker. Export encoding
 is diagnostic work and is excluded from performance measurements. Full-chapter
 acceptance remains open.
+
+### Aligning complete bubble paragraphs without shrinking — 2026-09-28
+
+The fresh live lower-left caption exposed an avoidable horizontal stagger: each
+line was centered independently in its widest safe strip. The fitter now shares
+one center when every occupied line can use it within those same strips. If the
+intervals do not intersect, the existing contour placement remains. This adds one
+bounded pass over the selected lines and reuses their measured widths. It changes
+no font size, line breaks, source cover, caption bounds or work limits.
+
+The exact 17-region replay retains the live source, translations, 144-DPI geometry
+and lower caption's 36-DIP font. Its independently measured visible line-center
+spread improves from 23.5 to 3 pixels; the public-output check fails before and
+passes afterward at a 10-pixel tolerance. The live baseline has the same caption
+geometry/text but minor raster differences, so pixel-identical live reproduction
+is not claimed. The first and last lines remain close to the page edge, intact.
+`tests/replay/check-caption-alignment.py` retains the runnable assertion; its
+black-caption/uniform-row limitations are documented in the replay README.
+
+All 14 standard renderer cases and the complete session lifecycle suite pass.
+The 44-view comparison retains all 409 captions, with identical caption records,
+no new margins and the same 28 strict passes / 16 existing failures. Twelve images
+change caption pixels; the other 32 are byte-identical. Private RED/GREEN evidence
+is under `.cache/replay/latest-lower-alignment/`; corpus results and timing logs
+are under `.cache/replay/shared-line-center-comparison/`.
+Visual review of all twelve changed views finds no new glyph clipping or artwork
+collisions. Pixel changes stay inside caption bounds, and cover records remain
+identical. The private review summary and paired crops are in that folder's
+`review/` directory.
+
+Serial ABBA measurements on the unchanged 13-region timing replay give repeated
+layout medians of 3.23–4.75 ms, versus 3.18–4.81 ms before. Fresh-layout samples
+overlap substantially and do not establish a reliable speed change. These are
+renderer measurements without inference, not live frame cadence. No new model
+work or image search was added. Existing source-recognition omissions and full
+chapter acceptance remain open.

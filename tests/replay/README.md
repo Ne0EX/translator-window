@@ -296,3 +296,30 @@ The three-heading reference remains local under `.cache/replay/reference-page/`.
 pixels that should become white paper before captions are drawn. The pale-bubble
 regression also checks every outline and exterior pixel remains unchanged. These
 checks establish the annotated coverage and protection, not general segmentation.
+
+### Visible caption alignment
+
+`check-caption-alignment.py` checks the public fixed-replay report and rendered
+pixels. It requires the complete translation, a local black caption, the specified
+minimum font size, and a maximum spread between the visible centers of its lines.
+It measures changed dark pixels within each reported line row, excluding unchanged
+source artwork. Use it for black captions over the supplied source frame, with
+uniform line height and no overlapping captions; it does not inspect the fitter's
+internal centers or masks.
+
+Keep the private source PNG and a fixed-text manifest under `.cache/replay/`.
+The manifest must retain the original captured view, DPI, region order, recognized
+text and translations. Run the usual fixed replay first, then check its output:
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 tests/replay/check-caption-alignment.py `
+  .cache/replay/latest-lower-alignment/shared-center/latest-lower-alignment.json `
+  --region 0 --minimum-font 36 --maximum-center-spread 10
+```
+
+The private lower-left passage from live export `20260928-005002932-23775f41`
+uses all 17 original regions at 144 DPI. Its baseline visible line centers span
+23.5 pixels. A 10-pixel limit allows glyph side-bearing differences while rejecting
+that visible stagger without reducing the demonstrated 36-DIP font. The checker
+writes `.alignment.json` beside the report for both RED and GREEN. Publisher
+images and private captured-view manifests remain outside the repository.

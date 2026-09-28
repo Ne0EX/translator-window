@@ -1410,6 +1410,17 @@ public sealed class SubtitleOverlay : Window
             text.Text = string.Join("\n", lines);
             text.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
             text.LineHeight = lineHeight * scaleY;
+            double sharedLeft = double.NegativeInfinity, sharedRight = double.PositiveInfinity;
+            for (int line = 0; line < lines.Length; line++)
+            {
+                if (lines[line].Length == 0) continue;
+                double slack = Math.Max(0, available[line] - widths[lines[line]]) / (2 * scaleX);
+                sharedLeft = Math.Max(sharedLeft, centers[line] - slack);
+                sharedRight = Math.Min(sharedRight, centers[line] + slack);
+            }
+            // Align the paragraph when every occupied strip admits the same center at this font.
+            if (sharedLeft <= sharedRight)
+                Array.Fill(centers, Math.Clamp(bubble.Width / 2d, sharedLeft, sharedRight));
             var effects = new TextEffectCollection();
             for (int line = 0, start = 0; line < lines.Length; start += lines[line++].Length + 1)
                 if (lines[line].Length > 0 && centers[line] != bubble.Width / 2d)
