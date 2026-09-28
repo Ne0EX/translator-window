@@ -326,6 +326,8 @@ public static class SourceCover
             || (long)bounds.Width * bounds.Height > maximumArea) return null;
 
         // Flood the complement from outside: disconnected holes are lettering, the connected outline is preserved.
+        if (whitePaper && footprint?.Classification == SourceCoverClass.Plain) RecoverPaper();
+        bounds = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
         var exterior = new bool[count];
         head = tail = 0;
         exterior[0] = true;
@@ -372,24 +374,103 @@ public static class SourceCover
             int offset = y * stride + x * 4;
             if (!MatchesFill(pixels[offset], pixels[offset + 1], pixels[offset + 2])) return;
             if ((pixels[offset] < fill.B - 12 || pixels[offset + 1] < fill.G - 12 || pixels[offset + 2] < fill.R - 12)
-                && (Ridge(x - 3, y, x + 3, y) || Ridge(x, y - 3, x, y + 3))) return;
+                && (Ridge(x, y, 3, 0) || Ridge(x, y, 0, 3))) return;
             inside[index] = true;
             pending[tail++] = index;
+        }
 
-            // ponytail: this detects thin ridges only; wider faint boundaries need contour segmentation.
-            bool Ridge(int ax, int ay, int bx, int by)
+        // ponytail: this detects thin ridges only; wider faint boundaries need contour segmentation.
+        bool Ridge(int x, int y, int dx, int dy)
+        {
+            int ax = x - dx, ay = y - dy, bx = x + dx, by = y + dy;
+            if (ax < 0 || ay < 0 || bx >= width || by >= height) return false;
+            int offset = y * stride + x * 4, a = ay * stride + ax * 4, b = by * stride + bx * 4;
+            int first = 255, second = 255;
+            for (int channel = 0; channel < 3; channel++)
             {
-                if (ax < 0 || ay < 0 || bx >= width || by >= height) return false;
-                int a = ay * stride + ax * 4, b = by * stride + bx * 4;
-                int first = 255, second = 255;
-                for (int channel = 0; channel < 3; channel++)
+                first = Math.Min(first, pixels[a + channel] - pixels[offset + channel]);
+                second = Math.Min(second, pixels[b + channel] - pixels[offset + channel]);
+            }
+            return first > 0 && second > 0 && Math.Max(first, second) > 12;
+        }
+
+        void RecoverPaper()
+        {
+            // ponytail: recover light neutral shading only; stronger textures need explicit container segmentation.
+            // Stay inside the already reserved search and existing area limit. The normal
+            // hole, density and artwork checks below still validate the complete cover.
+            var states = new byte[count];
+            var ridges = new sbyte[count];
+            for (int seed = 0; seed < count; seed++)
+            {
+                if ((seed & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                int sx = seed % search.Width, sy = seed / search.Width;
+                if (inside[seed] || sx == 0 || sy == 0 || sx + 1 == search.Width || sy + 1 == search.Height
+                    || !(inside[seed - 1] || inside[seed + 1] || inside[seed - search.Width] || inside[seed + search.Width])) continue;
+                byte seedKind = Classify(seed);
+                if (seedKind != 2) continue;
+                head = tail = 0;
+                bool open = false, touchesText = false;
+                states[seed] = 4; pending[tail++] = seed;
+                int left = minX, right = maxX, top = minY, bottom = maxY;
+                while (head < tail)
                 {
-                    first = Math.Min(first, pixels[a + channel] - pixels[offset + channel]);
-                    second = Math.Min(second, pixels[b + channel] - pixels[offset + channel]);
+                    if ((head & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
+                    int index = pending[head++], x = index % search.Width, y = index / search.Width;
+                    if (x == 0 || y == 0 || x + 1 == search.Width || y + 1 == search.Height) { open = true; continue; }
+                    left = Math.Min(left, x + search.Left); right = Math.Max(right, x + search.Left);
+                    top = Math.Min(top, y + search.Top); bottom = Math.Max(bottom, y + search.Top);
+                    touchesText |= text.Contains(x + search.Left, y + search.Top);
+                    Add(index - 1); Add(index + 1); Add(index - search.Width); Add(index + search.Width);
                 }
-                return first > 0 && second > 0 && Math.Max(first, second) > 12;
+                // Tiny neutral islands can be artwork's antialias fringe, not paper shading.
+                if (open || tail < 16 && !touchesText
+                    || (long)(right - left + 1) * (bottom - top + 1) > maximumArea) continue;
+                for (int n = 0; n < tail; n++) inside[pending[n]] = true;
+                minX = left; maxX = right; minY = top; maxY = bottom;
+
+                void Add(int index)
+                {
+                    if (inside[index]) return;
+                    byte kind = Classify(index);
+                    if (kind == 3) open = true;
+                    if (kind != 2) return;
+                    states[index] = 4; pending[tail++] = index;
+                }
+            }
+            byte Classify(int index)
+            {
+                if (states[index] != 0) return states[index];
+                int x = index % search.Width + search.Left, y = index / search.Width + search.Top;
+                for (int py = Math.Max(0, y - 2); py <= Math.Min(height - 1, y + 2); py++)
+                for (int px = Math.Max(0, x - 2); px <= Math.Min(width - 1, x + 2); px++)
+                {
+                    int local = search.Contains(px, py) ? (py - search.Top) * search.Width + px - search.Left : -1;
+                    sbyte ridge = local >= 0 ? ridges[local] : (sbyte)0;
+                    if (ridge != 0)
+                    {
+                        if (ridge > 0) return Cache(1);
+                        continue;
+                    }
+                    int offset = py * stride + px * 4;
+                    bool boundary = Math.Max(pixels[offset], Math.Max(pixels[offset + 1], pixels[offset + 2])) < 128
+                        || Ridge(px, py, 3, 0) || Ridge(px, py, 0, 3);
+                    if (local >= 0) ridges[local] = boundary ? (sbyte)1 : (sbyte)-1;
+                    if (boundary) return Cache(1);
+                }
+                int sample = y * stride + x * 4;
+                int low = Math.Min(pixels[sample], Math.Min(pixels[sample + 1], pixels[sample + 2]));
+                int high = Math.Max(pixels[sample], Math.Max(pixels[sample + 1], pixels[sample + 2]));
+                return Cache(low >= 192 && high - low <= 16 ? (byte)2 : (byte)3);
+
+                byte Cache(byte kind)
+                {
+                    states[index] = kind;
+                    return kind;
+                }
             }
         }
+
         // Keep faint darker outlines closed while allowing brighter highlights inside a pale bubble.
         bool MatchesFill(byte b, byte g, byte r) => b >= lowerB && b <= fill.B + brighterTolerance
             && g >= lowerG && g <= fill.G + brighterTolerance

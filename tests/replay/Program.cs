@@ -509,6 +509,50 @@ internal static class Program
                         Require(texturedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(shortRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Filling a roomy bubble around short text must preserve its outline and exterior artwork.");
+                var grayCapPixels = Pixels(frame);
+                for (int y = 105; y < 300; y++)
+                for (int x = 220; x < 375; x++)
+                {
+                    double radius = Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2);
+                    if (radius >= 0.90 && radius < 0.94)
+                        Set(grayCapPixels, fixture.Width, x, y, 151, 151, 151);
+                    else if (radius >= 0.94 && radius <= 1 && x >= 320 && x < 324 && y < 140)
+                        Set(grayCapPixels, fixture.Width, x, y, 130, 130, 130);
+                    else if (radius < 0.90 && y < 153 && grayCapPixels[(y * fixture.Width + x) * 4] == 248)
+                        Set(grayCapPixels, fixture.Width, x, y, 211, 211, 211);
+                }
+                Paint(grayCapPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(375, 120, 40, 28),
+                    (x, y) => {
+                        double radius = Math.Pow((x - 395d) / 20, 2) + Math.Pow((y - 134d) / 14, 2);
+                        return radius < 0.78 ? ((byte)211, (byte)211, (byte)211)
+                            : radius <= 1 ? ((byte)18, (byte)18, (byte)18)
+                            : ((byte)248, (byte)248, (byte)248);
+                    });
+                var grayCapPending = new Box(270, 269, 55, 19);
+                Paint(grayCapPixels, fixture.Width, fixture.Height, new Drawing.Rectangle(278, 274, 3, 10),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                var grayCapFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, grayCapPixels, fixture.Width * 4);
+                grayCapFrame.Freeze();
+                var grayCapFixture = fixture with { Id = "gray-cap-above-detected-text", Background = "gray-cap",
+                    Regions = fixture.Regions.Concat(new[] {
+                        new RegionFixture("pending", grayCapPending, "pending", "") }).ToArray(),
+                    WhiteSourceCoverPoints = new[] { new Box(297, 118, 1, 1), new Box(280, 140, 1, 1),
+                        new Box(315, 135, 1, 1), new Box(293, 128, 1, 1), new Box(265, 165, 1, 1) } };
+                var grayCapResult = Replay(grayCapFixture, grayCapFrame, allowMissing: true);
+                Verify(fixture with { Background = "gray-cap" }, grayCapResult);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics, grayCapFixture,
+                    grayCapFrame, grayCapResult, "fixed-text");
+                Require(grayCapResult.Items.Single(item => item.Kind == "caption").FontSize >= 28,
+                    "A gray cap above detected lettering must use coherent white bubble paper and readable complete local text.");
+                var grayCapRendered = Pixels(grayCapResult.Rendered);
+                for (int y = 0; y < fixture.Height; y++)
+                for (int x = 0; x < fixture.Width; x++)
+                    if (grayCapPending.Drawing.Contains(x, y)
+                        || Math.Pow((x - 297.5) / 77.5, 2) + Math.Pow((y - 202.5) / 97.5, 2) >= 0.90)
+                        Require(grayCapPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(grayCapRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "Recovering a gray cap must preserve every outline and antialias fringe pixel, exterior art pocket and pending passage.");
                 var highlightedPixels = Pixels(frame);
                 for (int y = 105; y < 300; y++)
                 for (int x = 220; x < 375; x++)

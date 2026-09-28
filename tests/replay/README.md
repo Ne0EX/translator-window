@@ -30,6 +30,10 @@ for completeness.
 Pale gaps newly enclosed by a qualified source-lettering cover must also be
 filled. A diagonal notch checks that an exterior-connected faint border remains
 visible, while an off-detection lettering probe requires full-bubble coverage.
+A gray cap above the detected text must become coherent white paper before
+captions are drawn. Its public regression preserves every outline and antialias
+pixel, a separate gray artwork pocket, and a neighboring passage awaiting
+translation, while retaining complete local text at 28 DIP or larger.
 A pale narration-box case requires each rendered line to share the box center,
 retain the complete text at 43 DIP or larger, and preserve every outline and
 exterior pixel. Joined bubbles retain their contour-fitting checks.

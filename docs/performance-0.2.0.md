@@ -1596,3 +1596,66 @@ capture-excluded window had exposed underlying terminals. Accessibility-only
 input did not move focus; a user clearance request remains pending. Neither
 change has a fresh accepted live caption export yet. The gray cap, recognition
 losses and complete-chapter acceptance remain open.
+
+#### Recovering gray paper above the detected lettering
+
+The upper bubble in live source `20260928-043216909-09048ff5` retained a gray
+patch above its detected text. Its paper touched the antialiased outline, so
+the existing complement flood classified that paper as connected to the outside.
+Increasing the global brightness tolerance also admitted browser background
+through an open page edge and was rejected.
+
+Recover bounded light-neutral paper components beside an already qualified
+white interior. Preserve a two-pixel neighborhood of dark or locally darker
+outline pixels. Components reaching the search edge, touching unsupported
+color, or exceeding the existing area limit are rejected. Tiny components
+outside detected text remain visible because they can be artwork fringes.
+The original complement, ink-density and non-text-component checks validate
+the resulting cover before it is returned; neighboring passages are still
+excluded by the caller. Search limits and models are unchanged. Cached border
+classification avoids repeating the same neighborhood calculation.
+
+The portable public renderer regression is RED before the change and GREEN
+afterward. It requires white paper at five source probes, complete local text,
+and exact preservation of the outline, gray exterior artwork and pending text.
+The matched native-source manifest retains all nine regions, their order,
+recognized text, translations and 144-DPI capture. Fifteen independently
+annotated paper probes are white before drawing captions. All 1,241 annotated
+upper-outline pixels, 133 previously preserved lower-outline pixels, four
+explicit lower-outline negatives and four outside-art probes remain unchanged.
+The upper caption grows from 33 to 37 DIP; the lower stays at 39 DIP. A caption
+from a misrecognized symbol strip stays local but trades 35 for 24 DIP. Its
+recognition error remains unresolved.
+
+All 14 standard renderer cases pass. The final 44-view comparison retains all
+420 caption records, no new margins and the same 16 existing strict failures.
+Forty-one images are identical; the remaining changes are in views 32, 45 and
+46. View 46's lower-left caption grows from 24 to 28 DIP. These retained-record
+counts do not measure missed source passages.
+
+Rejected trials are retained privately: a second recovery flood bypassed final
+art checks; charging another whole search consumed later regions' shared
+budget; direct threshold relaxation reopened the exterior; and unrestricted
+tiny components erased five hair-fringe pixels in view 06. Independent source
+annotations made the last failure RED. Retaining those tiny exterior fragments
+makes view 06 pixel-identical to baseline. Rejecting all tiny components also
+broke an existing source-lettering control; qualified text-area components
+retain their existing source-cover treatment.
+
+The uncached trial added roughly 0.3 seconds to the first layout on this
+fullscreen source. A profiler identified repeated border tests during paper
+recovery, especially a large rejected exterior component. Cache the immutable
+border predicate once per search coordinate. Final paired fresh-process samples
+were 1.316/1.322/1.428 seconds versus 1.132/1.219/1.120 seconds for the committed
+baseline: an observed first-layout cost of 0.103-0.309 seconds. Repeated-layout
+medians were 8.34/9.01/9.61 ms versus 8.82/12.35/10.05 ms. These few renderer
+samples do not establish live scrolling smoothness or a universal latency
+increase. Recovery adds two one-byte arrays within each already bounded search,
+at most 2 MB per cover; model and GPU allocations are unchanged.
+
+All source images, component diagnostics, failed trials and exact replay
+manifests remain private under `.cache/replay/gray-cap/` and
+`.cache/replay/live-upper-cover/current-cap-audit/`. These checks establish
+coverage on the stated captures, not generic segmentation or complete chapter
+translation. Small shading fragments outside detected text, stronger textures,
+missed passages, live flicker and whole-chapter acceptance remain open.
