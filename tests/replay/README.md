@@ -328,9 +328,9 @@ while the complete local caption and every exterior pixel remain intact. Two
 negative controls combine that shade with a faint outline and different exterior
 paper colors, preventing a wider color range from painting through the border.
 
-The distant-bubble regression also moves a source rectangle one pixel beside
-antialiased lettering. Both positions must retain complete local text at least
-24 DIP and white coverage of independently placed source ink, while preserving
+The distant-bubble regression also moves a source rectangle by one and two pixels
+beside antialiased lettering. All three positions must retain complete local text
+at least 24 DIP and white coverage of independently placed source ink, while preserving
 pending text and every outline/exterior pixel. It catches source-fringe sampling
 failures that otherwise send a readable bubble passage to the margin.
 

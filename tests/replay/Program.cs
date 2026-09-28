@@ -338,7 +338,7 @@ internal static class Program
                 var fringeFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
                     PixelFormats.Bgra32, null, fringePixels, distantTop.Width * 4);
                 fringeFrame.Freeze();
-                foreach (int sourceLeft in new[] { 551, 550 })
+                foreach (int sourceLeft in new[] { 551, 550, 549 })
                 {
                     var fringeDialogue = distantTop.Regions[0] with { Bounds = new Box(sourceLeft, 620, 100, 150) };
                     var fringeFixture = distantWithPending with { Id = $"distant-bubble-source-fringe-{sourceLeft}",
@@ -349,7 +349,7 @@ internal static class Program
                     if (diagnostics is not null) WriteDiagnostics(diagnostics, fringeFixture,
                         fringeFrame, fringeResult, "fixed-text");
                     Require(fringeResult.Items.Single(item => item.Kind == "caption").FontSize >= 24,
-                        "A one-pixel detection shift beside antialiased source ink must retain complete local bubble text.");
+                        "Small detection shifts beside antialiased source ink must retain complete local bubble text.");
                     var fringeRendered = Pixels(fringeResult.Rendered);
                     for (int y = 0; y < distantTop.Height; y++)
                     for (int x = 0; x < distantTop.Width; x++)

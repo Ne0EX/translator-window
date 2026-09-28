@@ -1659,3 +1659,63 @@ manifests remain private under `.cache/replay/gray-cap/` and
 coverage on the stated captures, not generic segmentation or complete chapter
 translation. Small shading fragments outside detected text, stronger textures,
 missed passages, live flicker and whole-chapter acceptance remain open.
+
+### Live scroll variation on the saved paper build — 2026-09-28
+
+Published build `3a46e36` was reopened through Computer Use with fullscreen
+Senmanga in Comet. The initial export had almost all captions clipped by the
+maximized app controls; it is excluded from visible-caption evidence. After
+minimizing those controls, accepted export `20260928-061533337-52b7b762` has a
+full canvas clip, nine captions, local upper/lower-left text at 34/39 DIP and
+local right-hand text at 28 DIP. Its source-cover result is visibly improved.
+
+After a native scroll, export `20260928-062022740-081e6a2e` also has a full clip
+and matching accepted/source generations. All 12 returned translations have
+captions, but the shaded upper-left passage falls to 18 DIP with original ink
+still visible, and the right passage becomes a margin caption. Recognition of
+the top heading also changes incorrectly. The independently read confession
+passes `check-live-evidence.py` in both exports; that is one passage, not chapter
+coverage. Native Stop returns the app to idle controls. The private source,
+accepted layer and composite remain under `.cache/live-qa/`.
+
+These stills confirm live operation and expose variation after navigation;
+they do not establish smooth scrolling, complete recognition or release readiness.
+
+### Keep an apology inside its available bubble — 2026-09-28
+
+View 27 sent its complete apology to the margin while view 26 fitted the same
+Japanese and returned Thai inside a nearly identical container. Small furigana
+outside the detected region contaminated the paper samples. The original
+one-pixel retry still failed smoothness, preventing the existing panel-boundary
+repair from using the available bubble area.
+
+Continue that same retry within its existing six-pixel band, keeping at least
+two samples. Already-qualified attempts, aggregate-error rejection, component
+checks, image-search limits and cancellation are unchanged. No font reduction,
+translation shortening, new model or dependency is introduced.
+
+The public renderer regression adds a two-pixel detection shift to the existing
+source-fringe case: RED rejects layout, GREEN retains complete local text at
+least 24 DIP and all protected pixels. The exact seven-region private view-27
+regression is also RED before the fix. GREEN places the full apology locally at
+17 DIP, with two independent source-letter probes covered before drawing text
+and all 3,603 annotated gutter/border pixels unchanged. Its rendered hash is
+`4FAD183E921D` (prefix). Evidence and reproduction commands are under
+`.cache/replay/view27-apology-audit/`.
+
+All 14 standard renderer cases and the existing color-cover checks pass. The
+44-view comparison retains all 420 caption records, introduces no margins or
+strict failures, and preserves the same 16 existing failures. Forty-one images
+are identical; only views 18, 27 and 40 change. Caption geometry changes only
+for the target apology. Independent pixel review finds view 18 changes only
+931 browser-label pixels, with residual fringe/banding still visible; no manga
+pixels change there. View 40 removes four residual source-glyph fringe pixels
+at the viewport edge while preserving its panel rules. No new manga-artwork
+damage was found in the saved corpus.
+
+Three alternating fresh-process comparisons measure candidate first layouts
+at 883/907/897 ms versus baseline 932/892/1,108 ms; repeated-layout medians are
+4.36/4.82/4.62 ms versus 4.78/4.48/6.65 ms. These samples show no observed timing
+regression for this view, not a general speedup. GPU/model allocation is unchanged.
+The live navigation variation above, missed source passages and whole-chapter
+acceptance remain open.

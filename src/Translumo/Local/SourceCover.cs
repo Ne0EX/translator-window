@@ -576,7 +576,7 @@ public static class SourceCover
         var right = new Pixel[textRegion.Height];
         long sampleError = 0;
         int sampleCount = 0, sampleInset = 0;
-        for (int attempt = 0; attempt < 2; attempt++)
+        for (int attempt = 0; attempt < sampleWidth - 1; attempt++)
         {
             sampleInset = attempt;
             sampleError = 0; sampleCount = 0;
@@ -591,8 +591,8 @@ public static class SourceCover
             }
             if (sampleCount == 0 || sampleError / (double)(sampleCount * 3) > 20) return null;
             if (IsSmoothLinear(left) && IsSmoothLinear(right)) break;
-            // Retry past the adjacent lettering fringe; preserve already-qualified paper and at least two samples.
-            if (attempt == 1 || sampleWidth < 3) return null;
+            // Retry past adjacent lettering within the same band; keep qualified paper and at least two samples.
+            if (sampleWidth - sampleInset == 2) return null;
         }
 
         long horizontalChange = 0;
