@@ -1420,3 +1420,22 @@ small repeated-layout cost and variable initial cost, not a latency guarantee.
 Temporarily removing only the cache dependency check made the progressive
 regression fail on differing completed geometry; restoring it passes. The
 temporary mutation and failed output remain private diagnostic evidence.
+
+#### Live confirmation and next defect
+
+Published build `0.2.0+d5f7bd111e03231aff9336902ea1b0307888b0b2` was opened
+through Computer Use, targeted at fullscreen Comet, started and scrolled. Its
+accepted generation 9 snapshot is `20260928-035344593-96c9e503`, 3840×2160 at
+144 DPI. All nine returned translations have captions; the two independently
+read left-bubble source literals pass the live evidence checker. The lower
+caption is local at 39 DIP. Native Stop reports `Translation stopped.`, with
+Start enabled and Stop disabled; the updated app remains open and idle.
+
+The new view also exposes an unfinished upper-bubble cover: pale source-text
+remnants remain above a 25-DIP caption with leading empty lines. Replaying this
+exact source and translations on `690e60d` and `d5f7bd1` confirms the defect
+predates this change. Only the lower caption changes, from 34 to 39 DIP; every
+cover record and the inspected upper remnant crop are identical. The small
+bottom title still uses a margin, and the right passage has a recognition loss.
+These are follow-up defects, not passing full-page acceptance. This live still
+and successful navigation/Stop do not measure compositor smoothness or flicker.
