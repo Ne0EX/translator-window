@@ -252,6 +252,9 @@ public sealed class SubtitleOverlay : Window
     internal void RestorePrevious()
     {
         Dispatcher.VerifyAccess();
+        captionDisplays = null;
+        captionCache.Clear();
+        sourceCoverCache.Clear();
         if (rollbackChildren is null) return;
         canvas.Children.Clear();
         foreach (var child in rollbackChildren) canvas.Children.Add(child);
@@ -394,6 +397,7 @@ public sealed class SubtitleOverlay : Window
         }
 
         bool displayProtectionChanged = sameCaptionFrame && (captionDisplays is null || !captionDisplays.SequenceEqual(displayStyles));
+        HashSet<int>? protectionInvalidated = null;
         if (displayProtectionChanged)
         {
             // Pending passages protect their rectangles; ready headings protect their qualified lettering masks.
@@ -412,7 +416,13 @@ public sealed class SubtitleOverlay : Window
                 sourcePlanCache.TryGetValue((sources[i], masks[i]), out var plan);
                 var local = masks[i]; local.Offset(-captureBounds.X, -captureBounds.Y);
                 var area = plan?.FootprintBounds ?? displayStyles[i]?.Cover.FootprintBounds ?? local;
-                if (changedAreas.Any(area.IntersectsWith)) captionCache.Remove(i);
+                if (!changedAreas.Any(area.IntersectsWith)) continue;
+                if (captionCache.TryGetValue(i, out var previous)
+                    && previous.SourceText == regions[i].Text
+                    && previous.Translation == (japaneseToThai && style == SubtitleStyle.Overwrite
+                        ? SafeThaiTranslation(translations[i]) : translations[i]))
+                    (protectionInvalidated ??= new()).Add(i);
+                captionCache.Remove(i);
             }
             sourceCoverCache.Clear();
         }
@@ -581,7 +591,7 @@ public sealed class SubtitleOverlay : Window
             }
             if (cacheCaptions)
             {
-                if (displayProtectionChanged) captionCache.Remove(i);
+                if (protectionInvalidated?.Contains(i) == true) captionCache.Remove(i);
                 else foreach (int stale in captionCache.Keys.Where(index => index >= i).ToArray())
                     captionCache.Remove(stale);
             }

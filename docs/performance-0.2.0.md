@@ -1789,6 +1789,10 @@ repeated-view medians are 8.88–9.93 ms. These renderer measurements exclude
 capture, OCR, translation and compositor presentation. No live smoothness or
 hardware-independent speed claim is made. No new model or VRAM allocation is
 introduced; the frame cache retains source cover plans until invalidated.
+Final review keeps forward invalidation for simultaneous content changes and
+clears provisional layout caches after a rejected render. The exact native
+replay still passes after those guards: 177 ms completion, with repeated medians
+of 9.17 and 9.63 ms. Recovery during an actual live session remains unverified.
 
 This repairs caption placement and source coverage, not recognition. The native
 right region still omits the visible lower clause from recognized text, and the
