@@ -1372,3 +1372,51 @@ already painted white by its ready neighbor. Any repair must also handle that
 neighbor becoming ready progressively, preserve pending source text and avoid
 stale cached placement. This remains follow-up work, alongside the neighboring
 heading exclusion that leaves the right bubble's exclamation dot visible.
+
+### Using ready neighboring bubble covers for fitting — 2026-09-28
+
+The lower-left color-page caption could not use a narrow strip of paper already
+painted white by the upper bubble's source cover. Fitting now checks the actual
+masks of overlapping, ready plain-white covers. It retains the passage's own
+placement area, source/caption blockers, pending-text exclusions and work limits.
+Source-cover painting is unchanged. Different-colored covers are not combined.
+
+Caption reuse records these neighboring cover dependencies. When a later passage
+becomes ready, affected earlier captions are reconsidered; unrelated earlier
+captions retain their cache. A valid but staggered joined-bubble fit can also try
+the two vertical edges of its existing area at the same font. The original fit
+remains the fallback. The alternate positions are checked only after a valid
+centered-position fit, avoiding a larger search at every rejected font size.
+
+The actual 144-DPI captured view reproduced RED through the public renderer:
+the complete local caption used 33 DIP with a 50-pixel spread between visible
+line centers. The final result uses 36 DIP, four complete lines and a 3-pixel
+spread. Its top moves from 750 to 761 physical pixels. A same-frame progressive
+check preserves every source pixel in the pending upper passage, matches a
+fresh all-ready render after completion, and repeats with identical metadata and
+pixels. An intermediate trial merely enlarged the text while retaining uneven
+lines; another found a smaller aligned fit. Neither trial was selected.
+
+All 14 standard renderer cases pass, including their repeated-layout performance
+checks. The target capture's repeated-layout median was 4.19 ms (worst 7.86 ms)
+in one run. This timer excludes capture, recognition, translation and compositor
+presentation. Private fixtures, intermediate failures and final diagnostics are
+under `.cache/replay/neighbor-cover/`. Live reading acceptance and the separate
+right-bubble punctuation-cover defect remain open.
+
+A fresh baseline/candidate comparison retains all 420 reported captions across
+44 saved views: 42 outputs are pixel-identical, with the same 28 passes and 16
+existing strict failures. The other two changes were inspected against source
+artwork. View 05 retains 17 DIP but sits 23 pixels lower, leaving eight clear
+rows above the panel line. View 45 grows from 26 to 27 DIP; its complete text
+now wraps the compound `คู่สนทนา` across two lines, an editorial limitation.
+The native upper caption also grows from 32 to 33 DIP. Cover metadata and the
+independently selected outline, ribbon and gold-art pixels remain unchanged.
+
+Two interleaved runs per build measured repeated-layout medians of 4.16–4.35 ms
+before and 4.38–4.54 ms after. First-layout samples were 1.197–1.209 seconds
+before and 1.197–1.283 seconds after. These few process-local samples show a
+small repeated-layout cost and variable initial cost, not a latency guarantee.
+Temporarily removing only the cache dependency check made the progressive
+regression fail on differing completed geometry; restoring it passes. The
+temporary mutation and failed output remain private diagnostic evidence.

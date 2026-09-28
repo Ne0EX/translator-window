@@ -151,6 +151,14 @@ record `captureTargetKind` as `selected-area`, `window`, `screen`, or `unknown`,
 separately from the `capturedViewEvidence` image filename. Complete-processing
 manifests currently lack the selected target kind, so their reports use `unknown`.
 
+Set `progressiveRegion` to one region ID in a private fixed-result fixture to
+check completion on the same renderer instance. That passage starts pending;
+its source rectangle must remain untouched. Once it is ready, captions and
+pixels must match a fresh all-ready render, and another identical render must
+remain stable. This catches earlier captions retaining an obsolete layout when
+a later region's source cover becomes available. It checks rendered stills,
+not live compositor flicker.
+
 ```powershell
 .\.tools\dotnet\dotnet.exe run --project tests\replay\ReplayCheck.csproj -- --diagnostics .cache\replay
 ```

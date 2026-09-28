@@ -68,8 +68,15 @@ internal static class Program
                     $"{fixture.Id}: captured image dimensions must match the fixture.");
             }
             else frame = BuildFrame(fixture);
+            int? pendingRegion = fixture.ProgressiveRegion is { } pendingId
+                ? Array.FindIndex(fixture.Regions, region => region.Id == pendingId) : null;
+            Require(pendingRegion is null || pendingRegion.Value >= 0,
+                $"{fixture.Id}: progressive region must identify an existing text region.");
             var first = Replay(fixture, frame, performance);
-            var second = Replay(fixture, frame);
+            // Compare fresh all-ready placement with completion through the same live renderer instance.
+            var second = Replay(fixture, frame, pendingRegionIndex: pendingRegion);
+            if (diagnostics is not null && pendingRegion is not null)
+                WriteDiagnostics(diagnostics, fixture with { Id = fixture.Id + "-progressive" }, frame, second, "fixed-text");
             Require(JsonSerializer.Serialize(first.Items.OrderBy(item => item.Kind).ThenBy(item => item.RegionId))
                 == JsonSerializer.Serialize(second.Items.OrderBy(item => item.Kind).ThenBy(item => item.RegionId)),
                 $"{fixture.Id}: repeated geometry, lines, font or color differed.");
@@ -1027,7 +1034,7 @@ internal static class Program
     }
 
     private static ReplayResult Replay(ReplayCase fixture, BitmapSource frame, bool performance = false,
-        bool allowMissing = false, bool allowLayoutRejection = false)
+        bool allowMissing = false, bool allowLayoutRejection = false, int? pendingRegionIndex = null)
     {
         var screen = Forms.Screen.PrimaryScreen?.Bounds ?? throw new InvalidOperationException("No primary display is available.");
         Require(fixture.Width <= screen.Width && fixture.Height <= screen.Height,
@@ -1041,6 +1048,32 @@ internal static class Program
                 && fixture.TargetLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase);
             var captionStyle = fixture.AutoStyle || fixture.Background == "colored-ink"
                 ? CaptionStyles.ResolveInstalled(new CaptionStyleOptions(CaptionRole.Auto)) : null;
+            if (pendingRegionIndex is int pendingIndex)
+            {
+                var partialTranslations = fixture.Regions.Select((region, index) =>
+                    index == pendingIndex ? "" : region.Translation).ToArray();
+                overlay.Render(capture, regions, partialTranslations, SubtitleStyle.Overwrite, 6, frame,
+                    japaneseToThai, allowMissingTranslations: true, captionStyle: captionStyle);
+                overlay.UpdateLayout();
+                var pendingTransform = PresentationSource.FromVisual(overlay)?.CompositionTarget?.TransformFromDevice
+                    ?? throw new InvalidOperationException("Subtitle overlay has no display transform.");
+                var pendingVisuals = ((Canvas)overlay.Content).Children.OfType<Border>().ToArray();
+                var pendingItems = pendingVisuals.Select(border => SceneItem.From(border, fixture, capture,
+                    Forms.SystemInformation.VirtualScreen, pendingTransform)).ToArray();
+                Require(pendingItems.All(item => item.RegionId != fixture.Regions[pendingIndex].Id),
+                    $"{fixture.Id}: a pending passage must not receive a caption or source cover.");
+                var partial = Pixels(RenderCapturedView(frame, pendingVisuals, pendingItems,
+                    fixture.Width, fixture.Height));
+                var original = Pixels(frame);
+                var pendingBounds = fixture.Regions[pendingIndex].Bounds.Drawing;
+                for (int y = pendingBounds.Top; y < pendingBounds.Bottom; y++)
+                {
+                    int offset = (y * fixture.Width + pendingBounds.Left) * 4;
+                    Require(original.AsSpan(offset, pendingBounds.Width * 4)
+                        .SequenceEqual(partial.AsSpan(offset, pendingBounds.Width * 4)),
+                        $"{fixture.Id}: another caption must preserve every pending source pixel.");
+                }
+            }
             var firstRender = Stopwatch.StartNew();
             try
             {
@@ -1122,6 +1155,20 @@ internal static class Program
                 }
             }
             var rendered = RenderCapturedView(frame, visuals, items, fixture.Width, fixture.Height);
+            if (pendingRegionIndex is not null)
+            {
+                overlay.Render(capture, regions, fixture.Regions.Select(region => region.Translation).ToArray(),
+                    SubtitleStyle.Overwrite, 6, frame, japaneseToThai, captionStyle: captionStyle);
+                overlay.UpdateLayout();
+                var repeatedVisuals = canvas.Children.OfType<Border>().ToArray();
+                var repeatedItems = repeatedVisuals.Select(border => SceneItem.From(border, fixture, capture,
+                    desktop, transform)).ToArray();
+                Require(JsonSerializer.Serialize(items) == JsonSerializer.Serialize(repeatedItems),
+                    $"{fixture.Id}: repeated completed captions changed geometry, text or style.");
+                Require(Pixels(rendered).AsSpan().SequenceEqual(Pixels(RenderCapturedView(frame,
+                    repeatedVisuals, repeatedItems, fixture.Width, fixture.Height))),
+                    $"{fixture.Id}: repeated completed captions changed rendered pixels.");
+            }
             if (fixture.Background == "bubble" && !allowMissing)
             {
                 var obstructed = BuildFrame(fixture with { Background = "dense-margins" });
@@ -1490,7 +1537,7 @@ internal static class Program
         ContainerFixture[] TextContainers, ProtectedFixture[] ProtectedArtwork, PassageFixture[] IntendedPassages,
         bool ExpectMarginCaption = false, bool ExpectColoredCaption = false, Box[]? DetectedRegions = null,
         string? CapturedView = null, bool AutoStyle = false, string[]? LocalHeadings = null,
-        Box[]? SourceInkPoints = null, Box[]? WhiteSourceCoverPoints = null)
+        Box[]? SourceInkPoints = null, Box[]? WhiteSourceCoverPoints = null, string? ProgressiveRegion = null)
     {
         public int SchemaVersion => 1;
     }

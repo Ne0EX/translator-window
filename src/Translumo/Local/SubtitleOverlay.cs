@@ -78,7 +78,7 @@ public sealed class SubtitleOverlay : Window
         double ScaleX, double ScaleY, CaptionStyleProfile CaptionStyle) captionOptions;
     private sealed record CachedCaption(string Translation, string SourceText, Drawing.Rectangle Source,
         Border? Caption, Drawing.Rectangle Bounds, Border? Badge, Drawing.Rectangle BadgeBounds,
-        double FontSize, string DisplayText);
+        double FontSize, string DisplayText, SourceCoverPlan[]? NeighborCovers = null);
     private readonly Dictionary<int, CachedCaption> captionCache = new();
     private nint handle;
     public nint ControlsHandle { get; set; }
@@ -448,6 +448,15 @@ public sealed class SubtitleOverlay : Window
                 }
                 permittedLocalArea = placementArea;
             }
+            // Borrow only pixels already painted as the same solid white paper. Bounds alone are not coverage.
+            var neighborCovers = hasContainer && sourceCovers[i] is
+                { Background: var ownBackground, Plan.Classification: SourceCoverClass.Plain }
+                && ownBackground == Colors.White
+                ? sourceCovers.Where((candidate, index) => index != i && candidate is
+                    { Background: var background, Plan.Classification: SourceCoverClass.Plain } other
+                    && background == Colors.White && other.Bounds.IntersectsWith(placementArea))
+                    .Select(candidate => candidate!.Value.Plan!).ToArray()
+                : Array.Empty<SourceCoverPlan>();
             var appearance = CaptionAppearance(CaptionStyles.ForRegion(captionStyle, regions[i]),
                 sourceCovers[i]?.Background,
                 captionStyle.Role == CaptionRole.Auto && captionStyle.Foreground == Colors.Black
@@ -491,7 +500,8 @@ public sealed class SubtitleOverlay : Window
             }
             if (cacheCaptions && captionCache.TryGetValue(i, out var previous)
                 && previous.Translation == translation && previous.SourceText == regions[i].Text
-                && previous.Source == source)
+                && previous.Source == source
+                && neighborCovers.SequenceEqual(previous.NeighborCovers ?? Array.Empty<SourceCoverPlan>()))
             {
                 if (sameCaptionFrame && previous.Caption is null)
                 {
@@ -571,7 +581,7 @@ public sealed class SubtitleOverlay : Window
                         Foreground = appearance.Foreground, Effect = appearance.Effect,
                         TextWrapping = TextWrapping.NoWrap, TextAlignment = TextAlignment.Center
                     };
-                    if (FitBubbleLines(bubbleText, words, placementArea, captureBounds, bubblePlan, blockers,
+                    if (FitBubbleLines(bubbleText, words, placementArea, captureBounds, bubblePlan, neighborCovers, blockers,
                             scaleX, scaleY, lineWidths, workBudget, cancellationToken, out var bubbleBounds))
                     {
                         caption = new Border { Tag = i, Background = Brushes.Transparent, Child = bubbleText };
@@ -643,7 +653,7 @@ public sealed class SubtitleOverlay : Window
                                     sourceCovers[i]?.Background, workBudget, cancellationToken, sourceCovers[i]?.Plan);
                                 if (candidateBackground is null && thai
                                     && sourceCovers[i]?.Plan is { Classification: SourceCoverClass.Plain } containerPlan
-                                    && LinesFitCover(text, candidate, captureBounds, containerPlan,
+                                    && LinesFitCover(text, candidate, captureBounds, containerPlan, neighborCovers,
                                         scaleX, scaleY, insetY, workBudget, cancellationToken,
                                         hasContainer ? null : line => BackgroundBrush(line, cover, captureBounds,
                                             backgroundPixels, frame, style, sourceCovers[i]?.Caption,
@@ -684,7 +694,7 @@ public sealed class SubtitleOverlay : Window
                 {
                     marginIndices.Add(i);
                     if (cacheCaptions) captionCache[i] = new CachedCaption(translation, regions[i].Text, source,
-                        null, Drawing.Rectangle.Empty, null, Drawing.Rectangle.Empty, 0, string.Empty);
+                        null, Drawing.Rectangle.Empty, null, Drawing.Rectangle.Empty, 0, string.Empty, neighborCovers);
                     continue;
                 }
                 throw new SubtitleLayoutException(backgroundRejected);
@@ -692,7 +702,7 @@ public sealed class SubtitleOverlay : Window
             placed.Add(position.Value);
             visuals.Add((caption, position.Value));
             if (cacheCaptions) captionCache[i] = new CachedCaption(translation, regions[i].Text, source,
-                caption, position.Value, null, Drawing.Rectangle.Empty, selectedFontSize, displayText);
+                caption, position.Value, null, Drawing.Rectangle.Empty, selectedFontSize, displayText, neighborCovers);
         }
 
         if (marginIndices.Count > 0)
@@ -1325,7 +1335,8 @@ public sealed class SubtitleOverlay : Window
     }
 
     private static bool FitBubbleLines(TextBlock text, string[] words, Drawing.Rectangle bubble,
-        Drawing.Rectangle capture, SourceCoverPlan plan, Drawing.Rectangle[] blockers, double scaleX, double scaleY,
+        Drawing.Rectangle capture, SourceCoverPlan plan, SourceCoverPlan[] neighbors,
+        Drawing.Rectangle[] blockers, double scaleX, double scaleY,
         Dictionary<string, double> widths, RenderWorkBudget budget, CancellationToken cancellationToken,
         out Drawing.Rectangle bounds)
     {
@@ -1343,108 +1354,128 @@ public sealed class SubtitleOverlay : Window
         // Each line uses a contiguous strip contained by the contour throughout its full height.
         for (int count = minimumLines; count <= Math.Min(16, (bubble.Height - 4) / lineHeight); count++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            budget.CheckPlacement();
-            int top = bubble.Top + (bubble.Height - count * lineHeight) / 2;
-            var candidateBounds = new Drawing.Rectangle(bubble.Left, top, bubble.Width, count * lineHeight);
-            if (blockers.Any(other => other.IntersectsWith(candidateBounds))) continue;
-            var available = new double[count];
-            var centers = new double[count];
-            for (int line = 0; line < count; line++)
-            {
-                int rowTop = top + line * lineHeight;
-                // Row-count candidates revisit the same strips; line height and the cover are fixed for this call.
-                if (strips.TryGetValue(rowTop, out var strip))
-                {
-                    available[line] = strip.Width;
-                    centers[line] = strip.Center;
-                    continue;
-                }
-                var common = new bool[bubble.Width];
-                Array.Fill(common, true);
-                for (int y = rowTop; y < rowTop + lineHeight; y++)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    budget.SampleBackgroundRow(bubble.Width);
-                    for (int x = 0; x < common.Length; x++)
-                        common[x] &= plan.Covers(bubble.Left + x - capture.X, y - capture.Y);
-                }
-                int bestLeft = 0, bestWidth = 0;
-                for (int x = 0, start = 0; x <= common.Length; x++)
-                {
-                    if (x < common.Length && common[x]) continue;
-                    if (x - start > bestWidth) { bestLeft = start; bestWidth = x - start; }
-                    start = x + 1;
-                }
-                available[line] = Math.Max(0, bestWidth - 4) * scaleX;
-                centers[line] = bestLeft + bestWidth / 2d;
-                strips[rowTop] = (available[line], centers[line]);
-            }
-            var costs = new double[count + 1, words.Length + 1];
-            var breaks = new int[count, words.Length];
-            for (int line = 0; line <= count; line++)
-            for (int start = 0; start <= words.Length; start++) costs[line, start] = double.PositiveInfinity;
-            costs[count, words.Length] = 0;
-            for (int line = count - 1; line >= 0; line--)
-            for (int start = words.Length - 1; start >= 0; start--)
+            (string Text, TextEffectCollection Effects, Drawing.Rectangle Bounds)? unaligned = null;
+            // Only a valid but staggered joined-bubble fit needs the two alternate vertical anchors.
+            for (int anchor = 0; anchor < (unaligned is null ? 1 : 3); anchor++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                // A narrow neck can remain empty while complete words use the adjoining lobes.
-                costs[line, start] = available[line] * available[line] + costs[line + 1, start];
-                breaks[line, start] = start;
-                string value = "";
-                for (int end = start; end < words.Length; end++)
+                budget.CheckPlacement();
+                int top = anchor == 0 ? bubble.Top + (bubble.Height - count * lineHeight) / 2
+                    : anchor == 1 ? bubble.Bottom - count * lineHeight - 2 : bubble.Top + 2;
+                var candidateBounds = new Drawing.Rectangle(bubble.Left, top, bubble.Width, count * lineHeight);
+                if (!bubble.Contains(candidateBounds)) continue;
+                if (blockers.Any(other => other.IntersectsWith(candidateBounds))) continue;
+                var available = new double[count];
+                var centers = new double[count];
+                for (int line = 0; line < count; line++)
                 {
-                    value += words[end];
-                    if (!widths.TryGetValue(value, out double width))
-                        widths[value] = width = new FormattedText(value, text.Language.GetEquivalentCulture(),
-                            text.FlowDirection, typeface, text.FontSize, text.Foreground,
-                            VisualTreeHelper.GetDpi(text).PixelsPerDip).WidthIncludingTrailingWhitespace;
-                    if (width > available[line]) break;
-                    double remaining = available[line] - width;
-                    double cost = remaining * remaining + costs[line + 1, end + 1];
-                    if (cost >= costs[line, start]) continue;
-                    costs[line, start] = cost;
-                    breaks[line, start] = end + 1;
+                    int rowTop = top + line * lineHeight;
+                    // Row-count candidates revisit the same strips; line height and the cover are fixed for this call.
+                    if (strips.TryGetValue(rowTop, out var strip))
+                    {
+                        available[line] = strip.Width;
+                        centers[line] = strip.Center;
+                        continue;
+                    }
+                    var common = new bool[bubble.Width];
+                    Array.Fill(common, true);
+                    for (int y = rowTop; y < rowTop + lineHeight; y++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        budget.SampleBackgroundRow(bubble.Width);
+                        for (int x = 0; x < common.Length; x++)
+                            common[x] &= CoveredForCaption(bubble.Left + x - capture.X, y - capture.Y,
+                                plan, neighbors, budget);
+                    }
+                    int bestLeft = 0, bestWidth = 0;
+                    for (int x = 0, start = 0; x <= common.Length; x++)
+                    {
+                        if (x < common.Length && common[x]) continue;
+                        if (x - start > bestWidth) { bestLeft = start; bestWidth = x - start; }
+                        start = x + 1;
+                    }
+                    available[line] = Math.Max(0, bestWidth - 4) * scaleX;
+                    centers[line] = bestLeft + bestWidth / 2d;
+                    strips[rowTop] = (available[line], centers[line]);
                 }
+                var costs = new double[count + 1, words.Length + 1];
+                var breaks = new int[count, words.Length];
+                for (int line = 0; line <= count; line++)
+                for (int start = 0; start <= words.Length; start++) costs[line, start] = double.PositiveInfinity;
+                costs[count, words.Length] = 0;
+                for (int line = count - 1; line >= 0; line--)
+                for (int start = words.Length - 1; start >= 0; start--)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    // A narrow neck can remain empty while complete words use the adjoining lobes.
+                    costs[line, start] = available[line] * available[line] + costs[line + 1, start];
+                    breaks[line, start] = start;
+                    string value = "";
+                    for (int end = start; end < words.Length; end++)
+                    {
+                        value += words[end];
+                        if (!widths.TryGetValue(value, out double width))
+                            widths[value] = width = new FormattedText(value, text.Language.GetEquivalentCulture(),
+                                text.FlowDirection, typeface, text.FontSize, text.Foreground,
+                                VisualTreeHelper.GetDpi(text).PixelsPerDip).WidthIncludingTrailingWhitespace;
+                        if (width > available[line]) break;
+                        double remaining = available[line] - width;
+                        double cost = remaining * remaining + costs[line + 1, end + 1];
+                        if (cost >= costs[line, start]) continue;
+                        costs[line, start] = cost;
+                        breaks[line, start] = end + 1;
+                    }
+                }
+                if (double.IsPositiveInfinity(costs[0, 0])) continue;
+                var lines = new string[count];
+                for (int line = 0, start = 0; line < count; line++)
+                {
+                    int end = breaks[line, start];
+                    lines[line] = string.Concat(words.Skip(start).Take(end - start));
+                    start = end;
+                }
+                text.Text = string.Join("\n", lines);
+                text.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+                text.LineHeight = lineHeight * scaleY;
+                double sharedLeft = double.NegativeInfinity, sharedRight = double.PositiveInfinity;
+                for (int line = 0; line < lines.Length; line++)
+                {
+                    if (lines[line].Length == 0) continue;
+                    double slack = Math.Max(0, available[line] - widths[lines[line]]) / (2 * scaleX);
+                    sharedLeft = Math.Max(sharedLeft, centers[line] - slack);
+                    sharedRight = Math.Min(sharedRight, centers[line] + slack);
+                }
+                // Align the paragraph when every occupied strip admits the same center at this font.
+                if (sharedLeft <= sharedRight)
+                    Array.Fill(centers, Math.Clamp(bubble.Width / 2d, sharedLeft, sharedRight));
+                var effects = new TextEffectCollection();
+                for (int line = 0, start = 0; line < lines.Length; start += lines[line++].Length + 1)
+                    if (lines[line].Length > 0 && centers[line] != bubble.Width / 2d)
+                        effects.Add(new TextEffect { PositionStart = start, PositionCount = lines[line].Length,
+                            Transform = new TranslateTransform((centers[line] - bubble.Width / 2d) * scaleX, 0) });
+                effects.Freeze();
+                text.TextEffects = effects;
+                bounds = candidateBounds;
+                if (neighbors.Length > 0 && sharedLeft > sharedRight)
+                {
+                    unaligned ??= (text.Text, effects, candidateBounds);
+                    continue;
+                }
+                return true;
             }
-            if (double.IsPositiveInfinity(costs[0, 0])) continue;
-            var lines = new string[count];
-            for (int line = 0, start = 0; line < count; line++)
+            if (unaligned is { } fallback)
             {
-                int end = breaks[line, start];
-                lines[line] = string.Concat(words.Skip(start).Take(end - start));
-                start = end;
+                text.Text = fallback.Text;
+                text.TextEffects = fallback.Effects;
+                bounds = fallback.Bounds;
+                return true;
             }
-            text.Text = string.Join("\n", lines);
-            text.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
-            text.LineHeight = lineHeight * scaleY;
-            double sharedLeft = double.NegativeInfinity, sharedRight = double.PositiveInfinity;
-            for (int line = 0; line < lines.Length; line++)
-            {
-                if (lines[line].Length == 0) continue;
-                double slack = Math.Max(0, available[line] - widths[lines[line]]) / (2 * scaleX);
-                sharedLeft = Math.Max(sharedLeft, centers[line] - slack);
-                sharedRight = Math.Min(sharedRight, centers[line] + slack);
-            }
-            // Align the paragraph when every occupied strip admits the same center at this font.
-            if (sharedLeft <= sharedRight)
-                Array.Fill(centers, Math.Clamp(bubble.Width / 2d, sharedLeft, sharedRight));
-            var effects = new TextEffectCollection();
-            for (int line = 0, start = 0; line < lines.Length; start += lines[line++].Length + 1)
-                if (lines[line].Length > 0 && centers[line] != bubble.Width / 2d)
-                    effects.Add(new TextEffect { PositionStart = start, PositionCount = lines[line].Length,
-                        Transform = new TranslateTransform((centers[line] - bubble.Width / 2d) * scaleX, 0) });
-            effects.Freeze();
-            text.TextEffects = effects;
-            bounds = candidateBounds;
-            return true;
         }
         return false;
     }
 
     private static bool LinesFitCover(TextBlock text, Drawing.Rectangle bounds, Drawing.Rectangle capture,
-        SourceCoverPlan plan, double scaleX, double scaleY, double insetY,
+        SourceCoverPlan plan, SourceCoverPlan[] neighbors, double scaleX, double scaleY, double insetY,
         RenderWorkBudget workBudget, CancellationToken cancellationToken,
         Func<Drawing.Rectangle, bool>? plainLine = null)
     {
@@ -1471,10 +1502,22 @@ public sealed class SubtitleOverlay : Window
                 cancellationToken.ThrowIfCancellationRequested();
                 workBudget.SampleBackgroundRow(width);
                 for (int x = left; x < left + width; x++)
-                    if (!plan.Covers(x - capture.X, y - capture.Y)) return false;
+                    if (!CoveredForCaption(x - capture.X, y - capture.Y, plan, neighbors, workBudget)) return false;
             }
         }
         return true;
+    }
+
+    private static bool CoveredForCaption(int x, int y, SourceCoverPlan plan,
+        SourceCoverPlan[] neighbors, RenderWorkBudget budget)
+    {
+        if (plan.Covers(x, y)) return true;
+        foreach (var neighbor in neighbors)
+        {
+            budget.SampleBackgroundRow(1);
+            if (neighbor.Covers(x, y)) return true;
+        }
+        return false;
     }
 
     internal static Drawing.Rectangle PermittedCaptionArea(Drawing.Rectangle source, Drawing.Rectangle capture)
