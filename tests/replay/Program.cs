@@ -112,6 +112,20 @@ internal static class Program
                 }
                 Require(dotWidths.Count == 3 && dotWidths.Max() - dotWidths.Min() <= 1,
                     "A single ellipsis glyph in a narrow bubble must render three complete dots of matching width.");
+                foreach (var sample in new[] {
+                    (Translation: "...・・・", Expected: "...・・・"),
+                    (Translation: "゠", Expected: "゠"),
+                    (Translation: "日本語", Expected: "แปลไม่สำเร็จ"),
+                    (Translation: "ไทย日本語", Expected: "ไทย") })
+                {
+                    var punctuation = fixture with { Regions = new[] {
+                        fixture.Regions[0] with { Translation = sample.Translation } } };
+                    var punctuationResult = Replay(punctuation, frame);
+                    var actual = punctuationResult.Items.Single(item => item.Kind == "caption").Text!
+                        .Replace("\r", "").Replace("\n", "");
+                    Require(actual == sample.Expected,
+                        $"A Thai caption must preserve punctuation without accepting untranslated Japanese: {sample.Translation}");
+                }
                 var questionWord = fixture with { Id = "thai-question-word", Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(278, 195, 41, 77),
                         Translation = "5...แค่นั้นเหรอ?" } },
@@ -1525,8 +1539,7 @@ internal static class Program
             string? regionId = index >= 0 && index < fixture.Regions.Length ? fixture.Regions[index].Id : null;
             var text = border.Child as TextBlock;
             string kind = text is null ? "cover"
-                : index >= 0 && index < fixture.Regions.Length && CaptionText(text.Text) == fixture.Regions[index].Translation
-                    ? "caption" : "association-badge";
+                : border.Uid == "association-badge" ? "association-badge" : "caption";
             var bounds = new Box(x, y, width, height);
             string? fallback = kind == "caption" && index >= 0
                 && !bounds.Drawing.IntersectsWith(fixture.Regions[index].Bounds.Drawing) ? "readable-margin" : null;

@@ -1309,3 +1309,66 @@ kept a terminal as its target. That session was closed. A subsequent screenshot
 attempt was rejected by automatic approval review because capture-excluded
 controls expose other desktop windows; manual Comet selection is pending.
 No current live-navigation or full-chapter pass is claimed.
+
+### Native capture recovered and a rejected masking trial — 2026-09-28
+
+Computer Use successfully selected the Senmanga Comet window and started the
+published `83f3d62` build. The window picker exposed incorrect off-screen
+accessibility coordinates for its last item; selecting the visible popup row
+resolved that attempt. Maximizing the controls made Start accessible, and
+Translumo was minimized after startup.
+
+Accepted live export `20260928-030214714-995552f8` contains the actual Comet
+source and WPF caption layer at 2286×1215 and 144 DPI. Its assembly version and
+source hash are recorded. The main left and right bubble passages render
+locally at 28–33 DIP. This is a still-image result, not a scrolling-cadence or
+whole-chapter pass. The checker exposes a real discrepancy: a punctuation-only
+returned translation becomes a failure message. The right passage also leaves
+a small original exclamation dot just beyond its detected text rectangle.
+Browser controls are included by window capture; fullscreen reading was then
+selected to remove that distraction from subsequent checks.
+
+Separately, the remaining saved-view margins were audited for missing usable
+space. Several passages cross hair, scene lines or halftone artwork and fail
+source-cover qualification before font fitting. A bounded trial reused measured
+row backgrounds after strict bubble qualification failed. View 16's complete
+narration moved from a margin to local 14-DIP text while retaining the inspected
+artwork, but view 22 acquired gray bands and original-letter remnants. The trial
+was rejected and its production changes removed. Passing the 14 standard
+renderer cases did not override this real-view regression.
+
+Private evidence remains under `.cache/replay/view16-layout-audit/`,
+`.cache/replay/view08-margin-audit/`, and `.cache/replay/coverage-audit/`.
+No source image or transcript is published. Broader reconstruction of lettering
+over artwork, the remaining source-text misses and full live reading acceptance
+remain open.
+
+### Preserve punctuation in Thai captions — 2026-09-28
+
+The shared Thai-caption filter classified the entire Japanese Unicode range as
+untranslated text. It removed middle dots from the returned `...・・・` and
+replaced the remaining punctuation with a failure message. The range predicate
+now exempts Unicode punctuation. Actual untranslated Japanese still produces
+the existing failure status; mixed Thai/Japanese filtering is unchanged.
+
+The public renderer regression observed RED before the change and GREEN after
+it, including four punctuation/status controls. All 14 standard cases passed.
+The replay reporter now identifies association badges by their actual UID,
+matching the live exporter, so changed caption text cannot masquerade as a badge.
+
+A static scan selected three affected saved views. Their punctuation captions
+are corrected, while unrelated existing text-completeness failures remain
+reported. The exact 144-DPI native source also passes fixed-result replay after
+the fix: only the affected caption changes, and the other 13 captions and all
+source covers stay identical. The final predicate evaluation-order cleanup was
+compiled and checked on those four views. No timing improvement is claimed.
+Evidence is retained in `.cache/replay/punctuation-evidence/`.
+
+Native Stop on the published baseline succeeded, and a second observation
+confirmed idle controls. The lower-left bubble's first line still sits roughly
+50 physical pixels left of the remaining lines despite complete 33-DIP text.
+An independent mask comparison indicates that fitting ignores a small area
+already painted white by its ready neighbor. Any repair must also handle that
+neighbor becoming ready progressively, preserve pending source text and avoid
+stale cached placement. This remains follow-up work, alongside the neighboring
+heading exclusion that leaves the right bubble's exclamation dot visible.

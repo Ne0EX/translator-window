@@ -1012,8 +1012,8 @@ public sealed class SubtitleOverlay : Window
 
     private static string SafeThaiTranslation(string value)
     {
-        static bool IsJapanese(char character) => character is >= '\u3040' and <= '\u30ff'
-            or >= '\u3400' and <= '\u9fff' or >= '\uf900' and <= '\ufaff';
+        static bool IsJapanese(char character) => (character is >= '\u3040' and <= '\u30ff'
+            or >= '\u3400' and <= '\u9fff' or >= '\uf900' and <= '\ufaff') && !char.IsPunctuation(character);
         bool removedJapanese = value.Any(IsJapanese);
         var text = new string(value.Where(character => !IsJapanese(character)).ToArray()).Trim();
         return text.Length > 0 && (text.Any(char.IsLetterOrDigit) || !removedJapanese)

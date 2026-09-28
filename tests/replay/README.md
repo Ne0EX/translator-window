@@ -22,6 +22,11 @@ A narrow question bubble must keep the Thai particle `เหรอ` on one line 
 retaining its complete caption, local placement and font size of at least 20 DIP.
 This regression protects a demonstrated dictionary boundary error; it does not
 claim complete Thai word segmentation.
+The same public case preserves middle dots and a Japanese-range punctuation
+character while retaining the existing untranslated-Japanese failure status and
+mixed-text filtering. Replay reports identify association badges by their actual
+UID; text changed by the renderer must still be reported as a caption and checked
+for completeness.
 Pale gaps newly enclosed by a qualified source-lettering cover must also be
 filled. A diagonal notch checks that an exterior-connected faint border remains
 visible, while an off-detection lettering probe requires full-bubble coverage.
