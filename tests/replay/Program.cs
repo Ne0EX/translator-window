@@ -330,6 +330,35 @@ internal static class Program
                         Require(distantPixels.AsSpan((y * distantTop.Width + x) * 4, 4)
                             .SequenceEqual(distantRendered.AsSpan((y * distantTop.Width + x) * 4, 4)),
                             "Recovering a distant bubble boundary must preserve pending text, its outline and exterior artwork.");
+                var fringePixels = (byte[])distantPixels.Clone();
+                Paint(fringePixels, distantTop.Width, distantTop.Height, new Drawing.Rectangle(647, 699, 3, 1),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                Paint(fringePixels, distantTop.Width, distantTop.Height, new Drawing.Rectangle(650, 699, 3, 1),
+                    (_, _) => ((byte)209, (byte)209, (byte)209));
+                var fringeFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
+                    PixelFormats.Bgra32, null, fringePixels, distantTop.Width * 4);
+                fringeFrame.Freeze();
+                foreach (int sourceLeft in new[] { 551, 550 })
+                {
+                    var fringeDialogue = distantTop.Regions[0] with { Bounds = new Box(sourceLeft, 620, 100, 150) };
+                    var fringeFixture = distantWithPending with { Id = $"distant-bubble-source-fringe-{sourceLeft}",
+                        Regions = new[] { fringeDialogue, distantWithPending.Regions[1] },
+                        WhiteSourceCoverPoints = new[] { new Box(552, 750, 1, 1), new Box(651, 699, 1, 1) } };
+                    var fringeResult = Replay(fringeFixture, fringeFrame, allowMissing: true);
+                    Verify(distantTop with { Regions = new[] { fringeDialogue } }, fringeResult);
+                    if (diagnostics is not null) WriteDiagnostics(diagnostics, fringeFixture,
+                        fringeFrame, fringeResult, "fixed-text");
+                    Require(fringeResult.Items.Single(item => item.Kind == "caption").FontSize >= 24,
+                        "A one-pixel detection shift beside antialiased source ink must retain complete local bubble text.");
+                    var fringeRendered = Pixels(fringeResult.Rendered);
+                    for (int y = 0; y < distantTop.Height; y++)
+                    for (int x = 0; x < distantTop.Width; x++)
+                        if (distantPending.Drawing.Contains(x, y)
+                            || Math.Pow((x - 600d) / 120, 2) + Math.Pow((y - 620d) / 220, 2) >= 0.97)
+                            Require(fringePixels.AsSpan((y * distantTop.Width + x) * 4, 4)
+                                .SequenceEqual(fringeRendered.AsSpan((y * distantTop.Width + x) * 4, 4)),
+                                "Ignoring a source-letter fringe in paper sampling must preserve pending text, the outline and exterior artwork.");
+                }
                 var distantOpenPixels = (byte[])distantPixels.Clone();
                 Paint(distantOpenPixels, distantTop.Width, distantTop.Height, new Drawing.Rectangle(596, 0, 8, 420),
                     (_, _) => ((byte)255, (byte)255, (byte)255));

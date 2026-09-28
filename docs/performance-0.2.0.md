@@ -1508,3 +1508,46 @@ change. The lower source rectangle changes from `[1363,1115,184,241]` to
 `[1362,1115,184,244]`; this input sensitivity needs diagnosis. Right-passage
 recognition loss, a hallucinated symbol passage and missed small titles also
 remain. This is not whole-view acceptance.
+
+### Source-letter fringes beside sampled paper — 2026-09-28
+
+The lower fallback in `20260928-043216909-09048ff5` was caused by a one-pixel
+detector shift beside an antialiased Japanese letter. The surrounding source
+pixels are identical to the earlier successful capture. One six-pixel sample
+row includes the letter fringe, fails the existing smooth-paper check, and
+removes the qualified footprint needed for the existing bubble-boundary search.
+
+Keep the original samples first. Only after a smoothness failure, retry once
+without the immediately adjacent pixel, retaining at least two samples per
+side. Mean-error, smoothness, component and work-budget limits stay unchanged.
+Interpolation uses the retained sample centers. No model or extra flood pass
+is added. Unconditionally dropping the adjacent pixel was rejected: it made a
+previously valid passage in view 22 fall back to the margin.
+
+At the approved public renderer boundary, a portable source-fringe regression
+fails before this change and passes afterward. It checks complete local text,
+white source-letter coverage, pending passages and exact outline/exterior
+preservation at two source positions one pixel apart. The exact native-source
+replay also changes from failing local placement to a complete 39-DIP lower
+caption. An independently selected black source pixel at `[1543,1230]` becomes
+white on the cover layer. The neighboring upper caption trades 37 for 30 DIP;
+all its text remains present. Fourteen selected artwork groups contain no
+newly concealed previously visible pixels. Historical gray-cap and small gold
+sparkle damage remain; this is not complete bubble reconstruction.
+
+All 14 standard renderer cases and the color-cover suite pass. The 44-view
+comparison retains all 420 caption records, no new margins and the same 16
+existing strict failures. Forty-three images are pixel-identical. The remaining
+901 changed pixels cover a Tameshiyo bookmark label in the browser toolbar;
+no manga pixels change in that saved corpus. The distinct fresh native-source
+regression above is checked separately. Private sources, failed trials and
+audits remain under `.cache/replay/lower-fringe/`.
+
+On the same fullscreen source, sampled repeated-layout medians were 9.25 ms
+before and 9.53–10.95 ms after; first layouts were 1.116 seconds before and
+1.208–1.269 seconds after. These few observations include the recovered local
+paragraph and do not establish a stable cost or compositor smoothness.
+The recovered lower caption still fails its existing visual alignment check:
+line centers span 24.5 pixels against a 20-pixel limit. That failure, the upper
+gray patch, detection/recognition losses and whole-chapter acceptance stay open.
+Fresh published-build confirmation follows separately.

@@ -491,22 +491,28 @@ public static class SourceCover
         int sampleWidth = Math.Min(6, Math.Min(textRegion.Left - permittedArea.Left,
             permittedArea.Right - textRegion.Right));
         if (sampleWidth < 2) return null;
-
         var left = new Pixel[textRegion.Height];
         var right = new Pixel[textRegion.Height];
         long sampleError = 0;
-        int sampleCount = 0;
-        for (int row = 0; row < textRegion.Height; row++)
+        int sampleCount = 0, sampleInset = 0;
+        for (int attempt = 0; attempt < 2; attempt++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            int y = textRegion.Top + row;
-            left[row] = Median(textRegion.Left - sampleWidth, textRegion.Left, y);
-            right[row] = Median(textRegion.Right, textRegion.Right + sampleWidth, y);
-            AccumulateError(textRegion.Left - sampleWidth, textRegion.Left, y, left[row]);
-            AccumulateError(textRegion.Right, textRegion.Right + sampleWidth, y, right[row]);
+            sampleInset = attempt;
+            sampleError = 0; sampleCount = 0;
+            for (int row = 0; row < textRegion.Height; row++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int y = textRegion.Top + row;
+                left[row] = Median(textRegion.Left - sampleWidth, textRegion.Left - sampleInset, y);
+                right[row] = Median(textRegion.Right + sampleInset, textRegion.Right + sampleWidth, y);
+                AccumulateError(textRegion.Left - sampleWidth, textRegion.Left - sampleInset, y, left[row]);
+                AccumulateError(textRegion.Right + sampleInset, textRegion.Right + sampleWidth, y, right[row]);
+            }
+            if (sampleCount == 0 || sampleError / (double)(sampleCount * 3) > 20) return null;
+            if (IsSmoothLinear(left) && IsSmoothLinear(right)) break;
+            // Retry past the adjacent lettering fringe; preserve already-qualified paper and at least two samples.
+            if (attempt == 1 || sampleWidth < 3) return null;
         }
-        if (sampleCount == 0 || sampleError / (double)(sampleCount * 3) > 20) return null;
-        if (!IsSmoothLinear(left) || !IsSmoothLinear(right)) return null;
 
         long horizontalChange = 0;
         for (int row = 0; row < textRegion.Height; row++)
@@ -525,8 +531,8 @@ public static class SourceCover
             int sampleRow = Math.Clamp(y - textRegion.Top, 0, textRegion.Height - 1);
             for (int x = permittedArea.Left; x < permittedArea.Right; x++)
             {
-                double t = (x - (textRegion.Left - sampleWidth / 2.0))
-                    / (textRegion.Width + sampleWidth);
+                double t = (x - (textRegion.Left - (sampleWidth + sampleInset) / 2.0))
+                    / (textRegion.Width + sampleWidth + sampleInset);
                 var expected = Pixel.Lerp(left[sampleRow], right[sampleRow], Math.Clamp(t, 0, 1));
                 int local = (y - permittedArea.Top) * permittedArea.Width + x - permittedArea.Left;
                 int rebuilt = local * 4;
