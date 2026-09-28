@@ -112,6 +112,18 @@ internal static class Program
                 }
                 Require(dotWidths.Count == 3 && dotWidths.Max() - dotWidths.Min() <= 1,
                     "A single ellipsis glyph in a narrow bubble must render three complete dots of matching width.");
+                var questionWord = fixture with { Id = "thai-question-word", Regions = new[] {
+                    fixture.Regions[0] with { Bounds = new Box(278, 195, 41, 77),
+                        Translation = "5...แค่นั้นเหรอ?" } },
+                    TextContainers = new[] { new ContainerFixture("short", new Box(250, 150, 100, 167), true) } };
+                var questionFrame = BuildFrame(questionWord);
+                var questionResult = Replay(questionWord, questionFrame);
+                if (diagnostics is not null)
+                    WriteDiagnostics(diagnostics, questionWord, questionFrame, questionResult, "fixed-text");
+                Verify(questionWord, questionResult);
+                var questionCaption = questionResult.Items.Single(item => item.Kind == "caption");
+                Require(questionCaption.FontSize >= 20 && questionCaption.Text!.Contains("เหรอ"),
+                    "A Thai question must keep เหรอ together without shrinking its 20-DIP caption.");
                 var openBubble = fixture with { Background = "open-bubble", Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(275, 120, 21, 86), Translation = "ได้เลย..." } },
                     // Transparent padding may overlap the outline; the pixel checks below protect the actual border.

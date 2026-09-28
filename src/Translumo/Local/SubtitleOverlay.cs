@@ -1041,7 +1041,16 @@ public sealed class SubtitleOverlay : Window
             iterator = IcuBreakOpen(IcuWordBreakIterator, "th", pinned.AddrOfPinnedObject(), value.Length, ref status);
             if (iterator == 0 || status > 0) return [value];
 
-            var graphemes = StringInfo.ParseCombiningCharacters(value).ToHashSet();
+            var breakPositions = StringInfo.ParseCombiningCharacters(value).ToHashSet();
+            // ponytail: protect this common particle from contextual ICU splits; other dictionary gaps remain.
+            const string particle = "เหรอ";
+            for (int at = value.IndexOf(particle, StringComparison.Ordinal); at >= 0;
+                 at = value.IndexOf(particle, at + particle.Length, StringComparison.Ordinal))
+            {
+                int end = at + particle.Length;
+                if (!breakPositions.Contains(at) || end < value.Length && !breakPositions.Contains(end)) continue;
+                for (int inside = at + 1; inside < end; inside++) breakPositions.Remove(inside);
+            }
             var starts = new List<int> { 0 };
             int previous = IcuBreakFirst(iterator);
             bool sawWord = false;
@@ -1049,7 +1058,7 @@ public sealed class SubtitleOverlay : Window
             {
                 if (previous < 0 || end <= previous || end > value.Length) return [value];
                 if (IcuBreakRuleStatus(iterator) < IcuWordStatusMinimum) continue;
-                if (sawWord && previous > 0 && graphemes.Contains(previous)) starts.Add(previous);
+                if (sawWord && previous > 0 && breakPositions.Contains(previous)) starts.Add(previous);
                 sawWord = true;
             }
             return starts.Select((start, index) => value[start..(index + 1 < starts.Count

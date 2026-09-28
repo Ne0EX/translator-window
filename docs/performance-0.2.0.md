@@ -1255,3 +1255,57 @@ is under `.cache/replay/panel-cropped-*`, `coverage-audit`, `view28-fit-audit`,
 and `view37-fit-audit`. Fresh live validation remains pending because automatic
 approval review blocks screenshots of the capture-excluded controls; no live
 smoothness or full-chapter acceptance follows from these saved-view checks.
+
+### Keeping a Thai question word together — 2026-09-28
+
+The grade-reaction bubble split `เหรอ` between caption lines. The public renderer
+regression reproduced this at 20 DIP in a synthetic bubble. Both the installed
+ICU word and line iterators allow this contextual split. Blanket resegmentation
+of adjacent tokens was rejected: it also joined unrelated fragments. ICU's
+[boundary-analysis documentation](https://unicode-org.github.io/icu/userguide/boundaryanalysis/)
+describes its dictionary support; dictionary output is not a guarantee of
+correct word boundaries in every context.
+
+The shared segmentation path now suppresses only existing boundaries inside
+this exact particle, with grapheme checks at both ends. It changes no translated
+characters or surrounding boundaries. This is a one-word lexical protection,
+not a general Thai segmentation repair or a new dictionary/model dependency.
+
+The public regression passes without reducing its 20-DIP font, and all 14
+standard cases pass. Across 44 saved views, all 409 captions remain, with no
+new margins or strict failure signatures. Forty-two rendered images are
+pixel-identical. View 18 keeps 21 DIP with complete words on three lines.
+Tradeoff: view 05 changes from five lines at 15 DIP to four lines at 14 DIP
+to retain the same word intact; its caption remains local. Other fonts and
+source covers are unchanged.
+
+Four ABBA runs of view 18 measured baseline repeated medians of 2.85/2.58 ms
+and candidate medians of 2.93/2.30 ms; worst repeats were at most 5.26 ms.
+First layouts were 1008.41/974.05 ms versus 1010.65/956.66 ms. These few samples
+show no resolved timing regression, not a general speedup or live-motion result.
+Exact logs and binary hashes remain in `.cache/replay/thai-word-timing/`;
+RED/GREEN output and the comparison are under `.cache/replay/thai-word-*`.
+
+### Additional source coverage and rejected OCR probes — 2026-09-28
+
+All 14 previously unannotated Senmanga views now have independent source-reading
+inventories in `.cache/replay/coverage-audit/unannotated-*`. The fixtures'
+intended-passage assertions are unchanged. This closes a manual inventory gap,
+not chapter acceptance: view 15 still lacks a complete angled thought; view 08
+has missing illustrated labels, and views 16/17 have missing board/display
+headings. Cropped text, silence, incidental effects and uncertain lettering are
+recorded separately. Several margin placements and translation meaning errors
+also remain; correct source recognition does not establish translation fidelity.
+
+A nine-crop run of the existing CUDA FP16 recognizer rejected green-channel
+normalization for the colored title and normal/inverted automatic-column inputs
+for the angled thought. The positive control stayed exact; inserted-character
+and faint-mark failures reproduced. No OCR production change was adopted.
+Private inputs, code hashes and outputs are in
+`.cache/replay/coverage-recognition-batch/`.
+
+Live export `20260928-021944868-0f5b5bef` is invalid reader evidence: the selector
+kept a terminal as its target. That session was closed. A subsequent screenshot
+attempt was rejected by automatic approval review because capture-excluded
+controls expose other desktop windows; manual Comet selection is pending.
+No current live-navigation or full-chapter pass is claimed.

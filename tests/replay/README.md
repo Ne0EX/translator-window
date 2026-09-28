@@ -18,6 +18,10 @@ fill inside an enclosed bubble (including pale lettering outside its detection),
 unchanged bubble outlines and exterior pixels, preservation of a second passage
 awaiting translation, light captions on dark fills, and dominant source-ink color
 when the Auto preset is selected. These checks use the public renderer only.
+A narrow question bubble must keep the Thai particle `เหรอ` on one line while
+retaining its complete caption, local placement and font size of at least 20 DIP.
+This regression protects a demonstrated dictionary boundary error; it does not
+claim complete Thai word segmentation.
 Pale gaps newly enclosed by a qualified source-lettering cover must also be
 filled. A diagonal notch checks that an exterior-connected faint border remains
 visible, while an off-detection lettering probe requires full-bubble coverage.
