@@ -217,6 +217,133 @@ internal static class Program
                         Require(largePixels.AsSpan((y * largeBubble.Width + x) * 4, 4)
                             .SequenceEqual(largeRendered.AsSpan((y * largeBubble.Width + x) * 4, 4)),
                             "Bounded bubble search must preserve every outline and exterior artwork pixel.");
+                var distantTop = fixture with { Id = "closed-bubble-with-distant-top", Background = "private",
+                    Width = 1200, Height = 1000, Dpi = 144,
+                    Regions = new[] { fixture.Regions[0] with { Bounds = new Box(550, 620, 100, 150),
+                        Translation = "ไม่ว่าคู่ต่อสู้จะยากที่จะเอาชนะแค่ไหนก็ตาม!" } },
+                    TextContainers = new[] { new ContainerFixture(fixture.Regions[0].Id, new Box(480, 400, 240, 440), true) },
+                    ProtectedArtwork = Array.Empty<ProtectedFixture>(),
+                    WhiteSourceCoverPoints = new[] { new Box(552, 750, 1, 1) } };
+                var distantPixels = new byte[distantTop.Width * distantTop.Height * 4];
+                Paint(distantPixels, distantTop.Width, distantTop.Height,
+                    new Drawing.Rectangle(0, 0, distantTop.Width, distantTop.Height), (x, y) => {
+                        double radius = Math.Pow((x - 600d) / 120, 2) + Math.Pow((y - 620d) / 220, 2);
+                        return radius > 1 ? ((byte)90, (byte)120, (byte)150)
+                            : radius >= 0.97 ? ((byte)18, (byte)18, (byte)18)
+                            : ((byte)255, (byte)255, (byte)255);
+                    });
+                foreach (int y in new[] { 642, 682, 742 })
+                foreach (int x in new[] { 551, 611 })
+                {
+                    Paint(distantPixels, distantTop.Width, distantTop.Height, new Drawing.Rectangle(x, y, 8, 17),
+                        (_, _) => ((byte)238, (byte)238, (byte)238));
+                    Paint(distantPixels, distantTop.Width, distantTop.Height, new Drawing.Rectangle(x + 3, y + 3, 2, 11),
+                        (_, _) => ((byte)18, (byte)18, (byte)18));
+                }
+                var distantPending = new Box(580, 460, 40, 40);
+                Paint(distantPixels, distantTop.Width, distantTop.Height, new Drawing.Rectangle(597, 470, 3, 12),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                var distantFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
+                    PixelFormats.Bgra32, null, distantPixels, distantTop.Width * 4);
+                distantFrame.Freeze();
+                var distantWithPending = distantTop with { Regions = distantTop.Regions.Concat(new[] {
+                    new RegionFixture("pending", distantPending, "pending", "") }).ToArray() };
+                var distantResult = Replay(distantWithPending, distantFrame, allowMissing: true);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics, distantWithPending,
+                    distantFrame, distantResult, "fixed-text");
+                var distantRendered = Pixels(distantResult.Rendered);
+                Verify(distantTop, distantResult);
+                Require(distantResult.Items.Single(item => item.Kind == "caption").FontSize >= 24,
+                    "Using the full closed bubble must retain a readable complete local caption.");
+                for (int y = 0; y < distantTop.Height; y++)
+                for (int x = 0; x < distantTop.Width; x++)
+                    if (distantPending.Drawing.Contains(x, y)
+                        || Math.Pow((x - 600d) / 120, 2) + Math.Pow((y - 620d) / 220, 2) >= 0.97)
+                        Require(distantPixels.AsSpan((y * distantTop.Width + x) * 4, 4)
+                            .SequenceEqual(distantRendered.AsSpan((y * distantTop.Width + x) * 4, 4)),
+                            "Recovering a distant bubble boundary must preserve pending text, its outline and exterior artwork.");
+                var distantOpenPixels = (byte[])distantPixels.Clone();
+                Paint(distantOpenPixels, distantTop.Width, distantTop.Height, new Drawing.Rectangle(596, 0, 8, 420),
+                    (_, _) => ((byte)255, (byte)255, (byte)255));
+                var distantOpenFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
+                    PixelFormats.Bgra32, null, distantOpenPixels, distantTop.Width * 4);
+                distantOpenFrame.Freeze();
+                var distantOpenFixture = distantWithPending with { Id = "distant-open-bubble", WhiteSourceCoverPoints = null };
+                var distantOpenResult = Replay(distantOpenFixture, distantOpenFrame, allowMissing: true);
+                Verify(distantTop with { WhiteSourceCoverPoints = null }, distantOpenResult);
+                var distantOpenRendered = Pixels(distantOpenResult.Rendered);
+                Require(distantOpenRendered[(750 * distantTop.Width + 552) * 4] == 238,
+                    "A paper corridor reaching the capture exterior must not qualify as a closed bubble.");
+                for (int y = 0; y < distantTop.Height; y++)
+                for (int x = 0; x < distantTop.Width; x++)
+                    if (distantPending.Drawing.Contains(x, y)
+                        || Math.Pow((x - 600d) / 120, 2) + Math.Pow((y - 620d) / 220, 2) >= 0.97)
+                        Require(distantOpenPixels.AsSpan((y * distantTop.Width + x) * 4, 4)
+                            .SequenceEqual(distantOpenRendered.AsSpan((y * distantTop.Width + x) * 4, 4)),
+                            "An open paper corridor must preserve pending text and all remaining outline and exterior pixels.");
+                var dottedPixels = (byte[])distantPixels.Clone();
+                for (int y = 430; y < 820; y += 10)
+                for (int x = 485; x < 716; x += 15)
+                    Paint(dottedPixels, distantTop.Width, distantTop.Height, new Drawing.Rectangle(x, y, 6, 3),
+                        (px, py) => Math.Pow((px - 600d) / 120, 2) + Math.Pow((py - 620d) / 220, 2) < 0.90
+                            ? ((byte)205, (byte)205, (byte)205)
+                            : (dottedPixels[(py * distantTop.Width + px) * 4 + 2],
+                                dottedPixels[(py * distantTop.Width + px) * 4 + 1], dottedPixels[(py * distantTop.Width + px) * 4]));
+                var dottedFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
+                    PixelFormats.Bgra32, null, dottedPixels, distantTop.Width * 4);
+                dottedFrame.Freeze();
+                var dottedFixture = distantWithPending with { Id = "text-on-halftone-paper", WhiteSourceCoverPoints = null };
+                var dottedResult = Replay(dottedFixture, dottedFrame, allowMissing: true, allowLayoutRejection: true);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics, dottedFixture,
+                    dottedFrame, dottedResult, "fixed-text");
+                var dottedRendered = Pixels(dottedResult.Rendered);
+                Require(dottedRendered[(611 * distantTop.Width + 532) * 4] == 205,
+                    "Extending a search around text must not erase halftone dots outside its source region.");
+                for (int y = 0; y < distantTop.Height; y++)
+                for (int x = 0; x < distantTop.Width; x++)
+                    if (distantPending.Drawing.Contains(x, y)
+                        || Math.Pow((x - 600d) / 120, 2) + Math.Pow((y - 620d) / 220, 2) >= 0.97)
+                        Require(dottedPixels.AsSpan((y * distantTop.Width + x) * 4, 4)
+                            .SequenceEqual(dottedRendered.AsSpan((y * distantTop.Width + x) * 4, 4)),
+                            "Textured paper reconstruction must preserve pending text and exterior artwork.");
+                var diagramPixels = (byte[])distantPixels.Clone();
+                var diagramPath = new[] { new Drawing.Point(525, 519), new Drawing.Point(556, 510),
+                    new Drawing.Point(564, 542), new Drawing.Point(590, 546), new Drawing.Point(585, 585),
+                    new Drawing.Point(567, 605), new Drawing.Point(554, 582), new Drawing.Point(532, 594),
+                    new Drawing.Point(520, 560), new Drawing.Point(525, 519) };
+                var diagramInk = new HashSet<Drawing.Point>();
+                for (int segment = 1; segment < diagramPath.Length; segment++)
+                {
+                    var start = diagramPath[segment - 1];
+                    var end = diagramPath[segment];
+                    int steps = Math.Max(Math.Abs(end.X - start.X), Math.Abs(end.Y - start.Y));
+                    for (int step = 0; step <= steps; step++)
+                    {
+                        int x = (int)Math.Round(start.X + (end.X - start.X) * step / (double)steps);
+                        int y = (int)Math.Round(start.Y + (end.Y - start.Y) * step / (double)steps);
+                        Set(diagramPixels, distantTop.Width, x, y, 18, 18, 18);
+                        diagramInk.Add(new Drawing.Point(x, y));
+                    }
+                }
+                var diagramFrame = BitmapSource.Create(distantTop.Width, distantTop.Height, distantTop.Dpi, distantTop.Dpi,
+                    PixelFormats.Bgra32, null, diagramPixels, distantTop.Width * 4);
+                diagramFrame.Freeze();
+                var diagramFixture = distantWithPending with { Id = "diagram-beside-distant-text",
+                    WhiteSourceCoverPoints = new[] { new Box(554, 648, 1, 1) } };
+                var diagramResult = Replay(diagramFixture, diagramFrame, allowMissing: true);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics, diagramFixture,
+                    diagramFrame, diagramResult, "fixed-text");
+                Verify(distantTop with { WhiteSourceCoverPoints = null }, diagramResult);
+                var diagramRendered = Pixels(diagramResult.Rendered);
+                foreach (var point in diagramInk)
+                    Require(diagramPixels.AsSpan((point.Y * distantTop.Width + point.X) * 4, 4)
+                        .SequenceEqual(diagramRendered.AsSpan((point.Y * distantTop.Width + point.X) * 4, 4)),
+                        "Recovering a closed background around text must preserve disconnected diagram strokes outside the text regions.");
+                for (int y = distantPending.Y; y < distantPending.Y + distantPending.Height; y++)
+                for (int x = distantPending.X; x < distantPending.X + distantPending.Width; x++)
+                    Require(diagramPixels.AsSpan((y * distantTop.Width + x) * 4, 4)
+                        .SequenceEqual(diagramRendered.AsSpan((y * distantTop.Width + x) * 4, 4)),
+                        "Protecting a neighboring diagram must also leave pending text untouched.");
                 Require(first.Items.Single(item => item.Kind == "caption").FontSize >= 28,
                     "A roomy bubble must use a larger readable caption instead of the fixed 24-DIP ceiling.");
                 var cornerNeighbor = fixture with { Regions = fixture.Regions.Concat(new[] {

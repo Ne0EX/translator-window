@@ -181,7 +181,8 @@ public static class SourceCover
             && (long)area.Width * area.Height <= MaxPermittedPixels;
 
     internal static SourceCoverPlan? TryCreateBubble(byte[] pixels, int width, int height,
-        Rectangle text, Rectangle search, Func<int, bool> reserveFlood, CancellationToken cancellationToken)
+        Rectangle text, Rectangle search, bool allowExpansion, Func<int, bool> reserveFlood,
+        CancellationToken cancellationToken)
     {
         if (!IsWithinBudget(search) || !search.Contains(text)) return null;
         // ponytail: bounded closed bubbles with nearly uniform fill; open borders and stronger textures use the footprint fallback.
@@ -223,40 +224,46 @@ public static class SourceCover
         var pending = new int[count];
         int head = 0, tail = 0;
         int minX = seedX, maxX = seedX, minY = seedY, maxY = seedY;
-        // ponytail: at most two floods; revisit only if another observed bubble needs more seed attempts.
-        for (int attempt = 0; attempt < 2; attempt++)
+        bool expandedSearch = false;
+        // ponytail: one alternate seed and one axis expansion; wider/open containers retain the footprint fallback.
+        for (int attempt = 0; attempt < 3; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (attempt != 0)
             {
                 if (!reserveFlood(count)) return null;
-                Array.Clear(inside);
+                if (inside.Length != count)
+                {
+                    inside = new bool[count];
+                    pending = new int[count];
+                }
+                else Array.Clear(inside);
             }
             head = tail = 0;
             minX = maxX = seedX; minY = maxY = seedY;
             int seed = (seedY - search.Top) * search.Width + seedX - search.Left;
             inside[seed] = true;
             pending[tail++] = seed;
-            bool escaped = false;
+            Point? escaped = null;
             while (head < tail)
             {
                 if ((head & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
                 int index = pending[head++];
                 int x = index % search.Width + search.Left, y = index / search.Width + search.Top;
                 if (x == search.Left || x == search.Right - 1 || y == search.Top || y == search.Bottom - 1)
-                { escaped = true; break; }
+                { escaped = new Point(x, y); break; }
                 minX = Math.Min(minX, x); maxX = Math.Max(maxX, x);
                 minY = Math.Min(minY, y); maxY = Math.Max(maxY, y);
                 Visit(index - 1, x - 1, y); Visit(index + 1, x + 1, y);
                 Visit(index - search.Width, x, y - 1); Visit(index + search.Width, x, y + 1);
             }
-            if (!escaped) break;
-            if (attempt == 1) return null;
+            if (escaped is null) break;
+            if (expandedSearch) return null;
 
             // Matching exterior paper can win the seed tie; retry once outside that escaped component.
             selected = -1;
             nearest = long.MaxValue;
-            for (int i = 0; i < samples.Length; i++)
+            for (int i = 0; attempt == 0 && i < samples.Length; i++)
             {
                 var sample = samples[i];
                 int index = (sample.Y - search.Top) * search.Width + sample.X - search.Left;
@@ -266,8 +273,28 @@ public static class SourceCover
                 long distance = (long)dx * dx + (long)dy * dy;
                 if (distance < nearest) { nearest = distance; selected = i; }
             }
-            if (selected < 0) return null;
-            (seedX, seedY, _) = samples[selected];
+            if (selected >= 0)
+            {
+                (seedX, seedY, _) = samples[selected];
+                continue;
+            }
+
+            // A larger closed component may enclose artwork; require independently qualified lettering.
+            if (!allowExpansion) return null;
+            var edge = escaped.Value;
+            // Reaching the captured image edge cannot be repaired by enlarging the search.
+            if (edge.X == 0 || edge.X == width - 1 || edge.Y == 0 || edge.Y == height - 1) return null;
+            int extraX = edge.X == search.Left || edge.X == search.Right - 1
+                ? Math.Max(text.Left - search.Left, search.Right - text.Right) : 0;
+            int extraY = edge.Y == search.Top || edge.Y == search.Bottom - 1
+                ? Math.Max(text.Top - search.Top, search.Bottom - text.Bottom) : 0;
+            var enlarged = search;
+            enlarged.Inflate(extraX, extraY);
+            enlarged.Intersect(new Rectangle(0, 0, width, height));
+            if (enlarged == search || !IsWithinBudget(enlarged)) return null;
+            search = enlarged;
+            count = search.Width * search.Height;
+            expandedSearch = true;
         }
         var bounds = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
         // Narrow lettering can occupy little of a bubble; also allow a square twice the utterance's length.
@@ -530,10 +557,11 @@ public static class SourceCover
                         }
                 }
                 int componentWidth = maxX - minX + 1, componentHeight = maxY - minY + 1;
-                // ponytail: connected ink taller than the source region's width can be artwork; touching vertical glyphs need segmentation.
-                if (letteringArea is { } lettering && count >= candidateCount / 5
-                    && componentWidth >= lettering.Width / 2d && componentHeight > lettering.Width
-                    && componentHeight > lettering.Height / 2d) return true;
+                // ponytail: large disconnected strokes outside the source can be artwork; large neighboring lettering needs segmentation.
+                if (letteringArea is { } lettering && componentWidth >= lettering.Width / 2d
+                    && componentHeight > lettering.Height / 2d
+                    && (!lettering.IntersectsWith(new Rectangle(minX, minY, componentWidth, componentHeight))
+                        || count >= candidateCount / 5 && componentHeight > lettering.Width)) return true;
                 // ponytail: near-span strokes are treated as chart connectors; use glyph segmentation to recover display text.
                 if ((componentWidth >= Math.Max(8, textRegion.Width * 3 / 4) && componentHeight <= 2)
                     || (componentHeight >= Math.Max(8, textRegion.Height * 3 / 4) && componentWidth <= 2)) return true;

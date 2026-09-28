@@ -425,7 +425,29 @@ public sealed class SubtitleOverlay : Window
             var placementArea = sourceCovers[i] is { Plan: { Classification: SourceCoverClass.Plain } } interior
                 && interior.Bounds.Contains(source) ? interior.Bounds : source;
             bool hasContainer = placementArea != source;
-            if (hasContainer) permittedLocalArea = placementArea;
+            if (hasContainer)
+            {
+                // A connected balloon can hold separate passages; keep each caption on its source's side.
+                foreach (var other in sources)
+                {
+                    if (other == source || other.Width <= 0 || other.Height <= 0
+                        || !placementArea.IntersectsWith(other)) continue;
+                    int left = placementArea.Left, top = placementArea.Top;
+                    int right = placementArea.Right, bottom = placementArea.Bottom;
+                    if (other.Left < source.Right && other.Right > source.Left)
+                    {
+                        if (other.Bottom <= source.Top) top = Math.Max(top, other.Bottom);
+                        else if (other.Top >= source.Bottom) bottom = Math.Min(bottom, other.Top);
+                    }
+                    if (other.Top < source.Bottom && other.Bottom > source.Top)
+                    {
+                        if (other.Right <= source.Left) left = Math.Max(left, other.Right);
+                        else if (other.Left >= source.Right) right = Math.Min(right, other.Left);
+                    }
+                    placementArea = Drawing.Rectangle.FromLTRB(left, top, right, bottom);
+                }
+                permittedLocalArea = placementArea;
+            }
             var appearance = CaptionAppearance(CaptionStyles.ForRegion(captionStyle, regions[i]),
                 sourceCovers[i]?.Background,
                 captionStyle.Role == CaptionRole.Auto && captionStyle.Foreground == Colors.Black
@@ -483,7 +505,8 @@ public sealed class SubtitleOverlay : Window
                     if (previous.Badge is not null) visuals.Add((previous.Badge, previous.BadgeBounds));
                     continue;
                 }
-                else if (previous.Caption is not null && previous.Badge is null)
+                else if (previous.Caption is not null && previous.Badge is null
+                    && (!hasContainer || placementArea.Contains(previous.Bounds)))
                 {
                     var cachedBackground = BackgroundBrush(previous.Bounds, cover, captureBounds, backgroundPixels,
                         frame, style, sourceCovers[i]?.Caption, sourceCovers[i]?.Bounds,
@@ -548,9 +571,8 @@ public sealed class SubtitleOverlay : Window
                         Foreground = appearance.Foreground, Effect = appearance.Effect,
                         TextWrapping = TextWrapping.NoWrap, TextAlignment = TextAlignment.Center
                     };
-                    if (FitBubbleLines(bubbleText, words, placementArea, captureBounds, bubblePlan,
-                            scaleX, scaleY, lineWidths, workBudget, cancellationToken, out var bubbleBounds)
-                        && !blockers.Any(other => other.IntersectsWith(bubbleBounds)))
+                    if (FitBubbleLines(bubbleText, words, placementArea, captureBounds, bubblePlan, blockers,
+                            scaleX, scaleY, lineWidths, workBudget, cancellationToken, out var bubbleBounds))
                     {
                         caption = new Border { Tag = i, Background = Brushes.Transparent, Child = bubbleText };
                         position = bubbleBounds;
@@ -1211,16 +1233,17 @@ public sealed class SubtitleOverlay : Window
                 searchX /= 2;
                 searchY /= 2;
             } while (true);
-            var plan = display?.Cover ?? SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
-                localSource, search, workBudget.TryBubble, cancellationToken);
-            if (display is null && plan is not null)
+            SourceCoverPlan? footprint = null;
+            if (display is null)
             {
                 workBudget.SampleBackgroundRow(checked(localMask.Width * localMask.Height));
-                var footprint = SourceCover.TryCreate(pixels, capture.Width, capture.Height, capture.Width * 4,
+                footprint = SourceCover.TryCreate(pixels, capture.Width, capture.Height, capture.Width * 4,
                     localSource, localMask, cancellationToken);
-                if (footprint is not null)
-                    plan = plan.IncludeFootprint(footprint, localSource, workBudget.SampleBackgroundRow, cancellationToken);
             }
+            var plan = display?.Cover ?? SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
+                localSource, search, footprint is not null, workBudget.TryBubble, cancellationToken);
+            if (display is null && plan is not null && footprint is not null)
+                plan = plan.IncludeFootprint(footprint, localSource, workBudget.SampleBackgroundRow, cancellationToken);
             if (plan is not null)
             {
                 var bubble = plan.FootprintBounds;
@@ -1254,8 +1277,7 @@ public sealed class SubtitleOverlay : Window
                     return false;
                 }
             }
-            plan ??= SourceCover.TryCreate(pixels, capture.Width, capture.Height, capture.Width * 4,
-                localSource, localMask, cancellationToken);
+            plan ??= footprint;
             if (plan is null)
             {
                 if (!CanUseLegacyMonochromeCover(source, mask, capture, pixels, cancellationToken)) return null;
@@ -1294,7 +1316,7 @@ public sealed class SubtitleOverlay : Window
     }
 
     private static bool FitBubbleLines(TextBlock text, string[] words, Drawing.Rectangle bubble,
-        Drawing.Rectangle capture, SourceCoverPlan plan, double scaleX, double scaleY,
+        Drawing.Rectangle capture, SourceCoverPlan plan, Drawing.Rectangle[] blockers, double scaleX, double scaleY,
         Dictionary<string, double> widths, RenderWorkBudget budget, CancellationToken cancellationToken,
         out Drawing.Rectangle bounds)
     {
@@ -1303,14 +1325,20 @@ public sealed class SubtitleOverlay : Window
         if (words.Length > 64 || text.Text.Contains('\n')) return false;
         text.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         int lineHeight = Math.Max(1, (int)Math.Ceiling(text.DesiredSize.Height / scaleY));
+        string originalText = text.Text;
+        if (!WrapWords(text, words, Math.Max(0, bubble.Width - 4) * scaleX, widths, cancellationToken)) return false;
+        int minimumLines = text.Text.Count(character => character == '\n') + 1;
+        text.Text = originalText;
         var typeface = new Typeface(text.FontFamily, text.FontStyle, text.FontWeight, text.FontStretch);
         var strips = new Dictionary<int, (double Width, double Center)>();
         // Each line uses a contiguous strip contained by the contour throughout its full height.
-        for (int count = 1; count <= Math.Min(16, (bubble.Height - 4) / lineHeight); count++)
+        for (int count = minimumLines; count <= Math.Min(16, (bubble.Height - 4) / lineHeight); count++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             budget.CheckPlacement();
             int top = bubble.Top + (bubble.Height - count * lineHeight) / 2;
+            var candidateBounds = new Drawing.Rectangle(bubble.Left, top, bubble.Width, count * lineHeight);
+            if (blockers.Any(other => other.IntersectsWith(candidateBounds))) continue;
             var available = new double[count];
             var centers = new double[count];
             for (int line = 0; line < count; line++)
@@ -1389,7 +1417,7 @@ public sealed class SubtitleOverlay : Window
                         Transform = new TranslateTransform((centers[line] - bubble.Width / 2d) * scaleX, 0) });
             effects.Freeze();
             text.TextEffects = effects;
-            bounds = new Drawing.Rectangle(bubble.Left, top, bubble.Width, count * lineHeight);
+            bounds = candidateBounds;
             return true;
         }
         return false;

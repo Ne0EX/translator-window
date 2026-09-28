@@ -24,6 +24,12 @@ visible, while an off-detection lettering probe requires full-bubble coverage.
 A pale narration-box case requires each rendered line to share the box center,
 retain the complete text at 43 DIP or larger, and preserve every outline and
 exterior pixel. Joined bubbles retain their contour-fitting checks.
+A distant closed boundary must still cover faint source-lettering fringes while
+preserving a separate passage awaiting translation. An open corridor to the
+capture edge and halftone dots outside the source region guard against treating
+unbounded paper or textured artwork as an expanded bubble interior.
+A disconnected thin diagram must retain every stroke while the source lettering
+remains covered and its complete caption remains readable.
 The stylized fixture deliberately records one heading as
 `unresolved-before-recognized-text`; it verifies that the evidence keeps the
 missing passage separate from a successfully rendered body caption, rather than

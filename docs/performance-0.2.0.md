@@ -988,3 +988,86 @@ component; the current block head supplies no angle and saved DBNet polygons
 also miss the target. Automatic association of the partial card edges remains
 unresolved. No detector threshold, retry or recognizer model was changed.
 Evidence is private under `.cache/replay/08-card-recovery/`.
+
+### Recovering a distant bubble boundary — 2026-09-28
+
+The lower-left passage's initial search ended inside its connected balloon. The
+fill reached that artificial boundary and fell back to a lettering-only cover,
+leaving 506 faint fringe pixels visible. The renderer now permits one expansion
+along the escaped axis, after the existing alternate-seed attempt. It requires
+an independently qualified source-text footprint, stays inside the captured view
+and the existing one-million-pixel search limit, and charges each attempt to the
+unchanged shared flood budget. Reaching the actual capture edge still rejects
+the cover. The existing footprint is computed once and reused for fallback and
+union with a successful bubble cover.
+
+The footprint requirement follows a rejected candidate: unrestricted expansion
+covered halftone dots in view 19, a star in view 14 and classroom-board details in
+views 16 and 17. A public halftone regression reproduces that damage before the
+guard and preserves its independent exterior-dot probe afterward. No fill
+tolerance or artwork threshold was relaxed.
+
+The subsequent comparison caught a second rejected candidate in Tameshiyo: its
+qualified source footprint did not prevent expansion over a map. An isolated
+map component was 86 by 98 pixels and wholly outside the detected text, but the
+existing artwork check compared it with the whole panel and required a fifth
+of all panel ink. The shared component check now also rejects substantial
+disconnected strokes outside the source using its existing half-source width
+and height limits. The previous rule for source-intersecting components remains.
+A thin-diagram public regression reproduces the loss while its source-cover and
+complete-caption assertions pass. This remains a coarse safeguard: unusually
+large neighboring lettering can force footprint fallback, and bounding-box
+overlap does not identify arbitrary diagrams.
+The final Tameshiyo map rectangle matches the pre-expansion baseline exactly:
+all 1,145 previously concealed source strokes are restored. Its existing
+region-15 missing-caption assertion remains a failure.
+
+Separate passages sharing a connected cover retain placement space on their own
+side of neighboring source regions. Painting still uses the qualified mask with
+the existing neighbor exclusions. The contour fitter rejects occupied candidate
+rectangles before scanning pixels and uses the existing word wrapper to skip
+line counts that cannot fit even at the full available width. This avoids the
+shared layout-budget failure without increasing work limits.
+
+The exact 13-region, 144-DPI source replay passes: the lower caption grows from
+24 to 34 DIP, the upper retains 32 DIP, and the right caption grows from 29 to
+30 DIP. All 506 former fringe pixels are verified white in the source cover
+before foreground captions draw. The complete output hash starts `CB7619663B4C`.
+The lower caption remains associated with its own passage. Its top line still
+uses an offset safe strip in the connecting neck; this is not final typography
+acceptance.
+
+Public distant-boundary and halftone regressions have recorded RED/GREEN results;
+the open-corridor, pending-passage, outline and exterior controls pass alongside
+all 14 standard renderer cases. The shared-passage placement check uses the
+exact private source and fixed translations. Two synthetic approximations were
+discarded: one did not reproduce the association fault, and the other's declared
+source crossed its drawn outline. Neither is counted as a passing regression.
+
+Private evidence is under `.cache/replay/escaped-axis-gated-final*`,
+`.cache/replay/live-lower-cover/` and
+`.cache/replay/escaped-axis-footprint-check/`. Full chapter coverage and live
+reading acceptance remain open.
+
+The final guarded build is in `.cache/replay/map-guard-final-bin/`; its public
+RED/GREEN, actual-source and map checks use the same prefix. The final 44-view
+comparison retains all 409 captions, with 28 strict passes and the same 16
+existing failures. There are no new margins or caption losses. Independent
+artwork probes across the five affected views pass. Only views 45 and 46 change
+pixels from the saved checkpoint: lower-left text grows 24 to 26 DIP in view 45;
+view 46's lower-left text changes 25 to 24 DIP with improved first-line grouping
+and separation from its neighbor, while the right passage grows 27 to 29 DIP.
+That one-DIP reduction is the measured readability tradeoff. The prior pale
+remnants and unresolved title text in those lower-resolution views remain.
+
+Final ABBA timing uses the unchanged 13-region replay without inference. Repeated
+view medians are 3.50–4.99 ms versus 3.35–6.13 ms before the change. First fresh
+overlay samples are 1,044.88/1,024.68 ms versus 961.72/905.91 ms, an observed
+83–119 ms increase. Later fresh samples are 718.99/464.69 and 661.61/552.76 ms
+versus 608.58/444.28 and 526.47/498.62 ms: 20–135 ms more in these samples.
+These small, order-sensitive measurements indicate extra first-layout work,
+with retained fast layout reuse; they do not establish live scrolling cadence
+or end-to-end translation latency. Exact logs and binary hashes are in
+`.cache/replay/map-guard-final-comparison/`.
+The complete session lifecycle suite passes, including progressive captions,
+navigation invalidation, changed-view restoration, cancellation and Stop cleanup.
