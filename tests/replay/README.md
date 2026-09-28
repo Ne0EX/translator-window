@@ -323,3 +323,31 @@ uses all 17 original regions at 144 DPI. Its baseline visible line centers span
 that visible stagger without reducing the demonstrated 36-DIP font. The checker
 writes `.alignment.json` beside the report for both RED and GREEN. Publisher
 images and private captured-view manifests remain outside the repository.
+
+### Complete passage with explicit punctuation allowances
+
+`check-passage-caption.py` uses a complete-processing report's existing
+`intendedPassages` source literal and bounds. It requires matching recognition,
+the entire returned translation in one local caption, and a font of at least
+12 DIP. Only punctuation characters explicitly supplied on the command line are
+ignored in recognition. The original strict stage outcomes are printed unchanged;
+a targeted pass does not turn a failing whole replay into a pass.
+
+The private joined-right regression uses
+`.cache/live-qa/joined-right-crops/processing.json` and the original
+`.cache/live-qa/20260928-005002932-23775f41.source.png` at 144 DPI. Its required
+source is `知力・体力・財力と時の運に第六感！使えるものはすべて使ってやるわ！`.
+The processing reports retain every detected region. After the normal
+`--processing` replay, run:
+
+```powershell
+.\.venv\Scripts\python.exe tests/replay/check-passage-caption.py `
+  .cache/live-qa/joined-right-crops/green/joined-right-complete.json `
+  --passage joined-right --ignore-punctuation '・！!“”'
+```
+
+RED omits the substantive clause `使えるものは`. GREEN retains it and presents the
+complete returned Thai locally at 28 DIP. The strict full-width `！` versus ASCII
+`!` mismatch still reports `recognition-error`; the targeted assertion records the
+explicit allowance. Private `red-run.json` and `green-run.json` preserve the whole
+harness exit status and worker provenance. Source images and manifests remain local.

@@ -502,14 +502,32 @@ def recognition_crops(image, region):
         clear = np.all(gray >= 220, axis=1)
         starts = np.flatnonzero(clear & ~np.r_[False, clear[:-1]])
         stops = np.flatnonzero(clear & ~np.r_[clear[1:], False]) + 1
-        gaps = [(stop - start, start, stop) for start, stop in zip(starts, stops)
-                if stop - start >= max(12, width / 4)
+        spans = list(zip(starts, stops))
+        minimum = max(12, width / 4)
+        gaps = [(stop - start, start, stop) for start, stop in spans
+                if stop - start >= minimum
                 and start >= width / 2 and height - stop >= width / 2]
+        if not gaps:
+            for (start, first_stop), (second_start, stop) in zip(spans, spans[1:]):
+                flank = min(first_stop - start, stop - second_start)
+                if (flank < minimum / 2 or second_start - first_stop > flank
+                        or start < width / 2 or height - stop < width / 2):
+                    continue
+                _, _, stats, _ = cv2.connectedComponentsWithStats(
+                    np.uint8(gray[first_stop:second_start] < 220))
+                if all((sx == 0 or sx + sw == width) and sw <= flank
+                       for sx, _, sw, _, _ in stats[1:]):
+                    gaps.append((stop - start, start, stop))
         if gaps:
             # ponytail: one wide white separator handles joined vertical passages;
-            # textured backgrounds or more lobes need stronger text segmentation.
+            # a short border-only neck may interrupt it. Interior ink and more
+            # lobes still need stronger text segmentation.
             _, start, stop = max(gaps)
-            cuts.insert(1, (start + stop) // 2)
+            cut = (start + stop) // 2
+            if not clear[cut]:
+                rows = np.flatnonzero(clear[start:stop]) + start
+                cut = int(rows[np.argmin(np.abs(rows - cut))])
+            cuts.insert(1, cut)
     return [image[max(0, y + start - (8 if start == 0 else 0)):
                   min(image.shape[0], y + stop + (8 if stop == height else 0)),
                   max(0, x - 8):min(image.shape[1], x + width + 8)]

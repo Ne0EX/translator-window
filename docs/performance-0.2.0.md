@@ -1138,3 +1138,71 @@ overlap substantially and do not establish a reliable speed change. These are
 renderer measurements without inference, not live frame cadence. No new model
 work or image search was added. Existing source-recognition omissions and full
 chapter acceptance remain open.
+
+### Recovering words in a joined right passage — 2026-09-28
+
+Fresh complete processing of live source `20260928-005002932-23775f41` reproduced
+the missing `使えるものは`. Those characters were inside the detected region and
+OCR crop. The bubble neck's border split a wide whitespace separator into two
+shorter white runs, so both passages reached recognition as one tall crop.
+
+The existing crop helper now also accepts two sufficiently wide white runs
+interrupted by a shorter band whose ink components touch a crop edge and stay
+narrower than either white run. This path runs only when the original separator
+search fails. The cut lies on an actually white row; full source width, all
+source pixels and the existing limit of two crops are retained. No detector
+threshold, model or region geometry changes.
+
+The complete-processing targeted check goes RED to GREEN: every substantive
+source character is recognized, and the complete returned Thai fits locally at
+28 DIP, versus 27 DIP for the earlier incomplete recognition. The lower-left
+36-DIP and upper-left 26-DIP captions remain local with their checked source
+coverage intact. Only the right region's recognized text changes among all 17
+regions. An unrelated browser control's translation varies between runs despite
+unchanged recognition. Translation accuracy is a separate remaining limitation;
+complete returned text does not prove preservation of every source meaning.
+
+The original strict manifest remains a failure because its full-width `！`
+differs from the recognizer's ASCII `!`. The retained public-output assertion
+`tests/replay/check-passage-caption.py` records that outcome and permits only
+explicitly listed punctuation differences; it cannot ignore missing words.
+Private inputs, RED/GREEN reports and source hashes are under
+`.cache/live-qa/joined-right-crops/`.
+
+CPU comparison of 448 saved regions across 44 historical reader views and two
+live views leaves 445 crop outputs byte-identical. The three changed regions are
+this right passage at two full-view scales and one viewport-clipped view.
+An actual model comparison preserves the already-complete lower-resolution
+passage. The clipped passage remains incomplete; it is not a full-passage pass.
+Comic Days, Tameshiyo, prior joined bubbles and tall punctuation controls retain
+their existing crop inputs.
+
+One warmed CUDA FP16 process measured real detection plus progressive recognition
+in ABBA order, without translation or cached recognized text. Before samples are
+645.6/691.3 ms; after samples are 721.2/690.4 ms: an observed median increase of
+37.4 ms on this 17-region view. These few samples do not establish a general
+latency guarantee. The existing dmMaze block detector and pinned MangaOCR FP16
+encoder/decoder graphs remain in use; hashes and provider details are recorded
+in `recognition-benchmark.json`. There is no new model or startup dependency.
+
+### Source coverage audit and the unprocessed view — 2026-09-28
+
+The 44-view comparison contains 42 Senmanga views and two other readers; 14 of
+those Senmanga fixtures have no intended-passage assertions. Its retained-caption
+count is a renderer regression measure, not a complete-source coverage score.
+The audit distinguishes punctuation, grouping and browser-control failures from
+real manga omissions. Angled narration in view 15, small labels in view 08,
+promotional title strips in view 46 and color-headline recognition remain open.
+Views 20/26 retain geometry assertions, and view 37 still has a fully visible
+thought in the margin. Private source evidence is indexed under
+`.cache/replay/coverage-audit/`.
+
+Correction to the earlier view-28 limitation: its source image exists, but had
+not been processed. A fresh complete-processing run now yields ten captions,
+including all five main manga passages locally with no observed source remnants
+or border damage. Two annotated passages match exactly; the forgiveness passage
+has an extra recognized `の` before `聞`, so the strict replay still fails. Its
+long returned Thai uses 13 DIP and remains a readability review item; other main
+captions use 17–35 DIP. This supplemental view does not change the original
+44-view regression counts or establish full chapter acceptance. Results are in
+`.cache/replay/senmanga-acceptance/processing-28-current/`.
