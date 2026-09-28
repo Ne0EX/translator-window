@@ -181,7 +181,7 @@ public static class SourceCover
             && (long)area.Width * area.Height <= MaxPermittedPixels;
 
     internal static SourceCoverPlan? TryCreateBubble(byte[] pixels, int width, int height,
-        Rectangle text, Rectangle search, bool allowExpansion, Func<int, bool> reserveFlood,
+        Rectangle text, Rectangle search, SourceCoverPlan? footprint, Func<int, bool> reserveFlood,
         CancellationToken cancellationToken)
     {
         if (!IsWithinBudget(search) || !search.Contains(text)) return null;
@@ -224,8 +224,9 @@ public static class SourceCover
         var pending = new int[count];
         int head = 0, tail = 0;
         int minX = seedX, maxX = seedX, minY = seedY, maxY = seedY;
-        bool expandedSearch = false;
-        // ponytail: one alternate seed and one axis expansion; wider/open containers retain the footprint fallback.
+        bool repairedBoundary = false;
+        Rectangle panelCut = Rectangle.Empty;
+        // ponytail: one alternate seed and one boundary repair; other open containers retain the footprint fallback.
         for (int attempt = 0; attempt < 3; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -258,7 +259,7 @@ public static class SourceCover
                 Visit(index - search.Width, x, y - 1); Visit(index + search.Width, x, y + 1);
             }
             if (escaped is null) break;
-            if (expandedSearch) return null;
+            if (repairedBoundary) return null;
 
             // Matching exterior paper can win the seed tie; retry once outside that escaped component.
             selected = -1;
@@ -280,7 +281,13 @@ public static class SourceCover
             }
 
             // A larger closed component may enclose artwork; require independently qualified lettering.
-            if (!allowExpansion) return null;
+            if (footprint is null) return null;
+            if (footprint.Classification == SourceCoverClass.Plain
+                && !(panelCut = FindPanelCut()).IsEmpty)
+            {
+                repairedBoundary = true;
+                continue;
+            }
             var edge = escaped.Value;
             // Reaching the captured image edge cannot be repaired by enlarging the search.
             if (edge.X == 0 || edge.X == width - 1 || edge.Y == 0 || edge.Y == height - 1) return null;
@@ -294,7 +301,7 @@ public static class SourceCover
             if (enlarged == search || !IsWithinBudget(enlarged)) return null;
             search = enlarged;
             count = search.Width * search.Height;
-            expandedSearch = true;
+            repairedBoundary = true;
         }
         var bounds = Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
         // Narrow lettering can occupy little of a bubble; also allow a square twice the utterance's length.
@@ -349,7 +356,7 @@ public static class SourceCover
 
         void Visit(int index, int x, int y)
         {
-            if (inside[index]) return;
+            if (inside[index] || panelCut.Contains(x, y)) return;
             int offset = y * stride + x * 4;
             if (!MatchesFill(pixels[offset], pixels[offset + 1], pixels[offset + 2])) return;
             inside[index] = true;
@@ -359,6 +366,82 @@ public static class SourceCover
         bool MatchesFill(byte b, byte g, byte r) => b >= fill.B - 12 && b <= fill.B + brighterTolerance
             && g >= fill.G - 12 && g <= fill.G + brighterTolerance
             && r >= fill.R - 12 && r <= fill.R + brighterTolerance;
+        Rectangle FindPanelCut()
+        {
+            // ponytail: panel cuts need an opposing straight rule and paired endpoints at a clean paper gutter.
+            int darkest = Math.Min(fill.B, Math.Min(fill.G, fill.R));
+            if (darkest < 232 || Math.Max(fill.B, Math.Max(fill.G, fill.R)) - darkest > 8)
+                return Rectangle.Empty;
+            int middle = text.Top + text.Height / 2;
+            int initialLeft = text.Left - 1, initialRight = text.Right;
+            while (initialLeft > search.Left && !Dark(initialLeft, middle)) initialLeft--;
+            while (initialRight < search.Right - 1 && !Dark(initialRight, middle)) initialRight++;
+            if (initialLeft <= search.Left || initialRight >= search.Right - 1) return Rectangle.Empty;
+            foreach (int direction in new[] { 1, -1 })
+            {
+                int ruleWidth = Math.Max(64, text.Width);
+                int ruleLeft = text.Left + (text.Width - ruleWidth) / 2;
+                bool panelRule = false;
+                if (ruleLeft <= search.Left || ruleLeft + ruleWidth >= search.Right) continue;
+                for (int y = direction > 0 ? text.Top - 2 : text.Bottom;
+                     y > search.Top && y + 1 < search.Bottom; y -= direction)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    panelRule = true;
+                    for (int x = ruleLeft; x < ruleLeft + ruleWidth && panelRule; x++)
+                        panelRule = Dark(x, y) && Dark(x, y + 1);
+                    if (panelRule) break;
+                }
+                if (!panelRule) continue;
+                int left = initialLeft, right = initialRight;
+                for (int y = middle + direction; y > search.Top && y < search.Bottom - 1; y += direction)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int nextLeft = Follow(left, y), nextRight = Follow(right, y);
+                    if (nextLeft >= 0 && nextRight >= 0)
+                    {
+                        if (nextLeft >= text.Left || nextRight < text.Right) break;
+                        left = nextLeft; right = nextRight;
+                        continue;
+                    }
+                    if (nextLeft >= 0 || nextRight >= 0 || y >= text.Top && y < text.Bottom
+                        || Math.Abs(y - middle) < Math.Max(12, text.Height / 2)) break;
+                    bool paper = true;
+                    for (int row = 0; row < 8 && paper; row++)
+                    {
+                        int sampleY = y + direction * row;
+                        if (sampleY <= search.Top || sampleY >= search.Bottom - 1) { paper = false; break; }
+                        for (int x = left; x <= right; x++)
+                        {
+                            int offset = (sampleY * width + x) * 4;
+                            if (Math.Min(pixels[offset], Math.Min(pixels[offset + 1], pixels[offset + 2])) < 232
+                                || Math.Abs(pixels[offset] - fill.B) > 24
+                                || Math.Abs(pixels[offset + 1] - fill.G) > 24
+                                || Math.Abs(pixels[offset + 2] - fill.R) > 24)
+                            { paper = false; break; }
+                        }
+                    }
+                    if (paper) return new Rectangle(left, y, right - left + 1, 1);
+                    break;
+                }
+            }
+            return Rectangle.Empty;
+
+            int Follow(int x, int y)
+            {
+                for (int step = 0; step <= 3; step++)
+                {
+                    if (x - step > search.Left && Dark(x - step, y)) return x - step;
+                    if (step > 0 && x + step < search.Right - 1 && Dark(x + step, y)) return x + step;
+                }
+                return -1;
+            }
+            bool Dark(int x, int y)
+            {
+                int offset = (y * width + x) * 4;
+                return Math.Max(pixels[offset], Math.Max(pixels[offset + 1], pixels[offset + 2])) < 128;
+            }
+        }
         void Outside(int index)
         {
             if (inside[index] || exterior[index]) return;

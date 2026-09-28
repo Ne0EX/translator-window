@@ -30,6 +30,10 @@ capture edge and halftone dots outside the source region guard against treating
 unbounded paper or textured artwork as an expanded bubble interior.
 A disconnected thin diagram must retain every stroke while the source lettering
 remains covered and its complete caption remains readable.
+A panel-cropped bubble must keep its complete caption above the paper gutter,
+preserving every gutter, border and exterior pixel. The synthetic regression
+uses paired contour endpoints and an opposing straight panel rule; ordinary
+open bubbles retain their existing source-cover and artwork checks.
 The stylized fixture deliberately records one heading as
 `unresolved-before-recognized-text`; it verifies that the evidence keeps the
 missing passage separate from a successfully rendered body caption, rather than

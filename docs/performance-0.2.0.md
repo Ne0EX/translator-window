@@ -1206,3 +1206,52 @@ long returned Thai uses 13 DIP and remains a readability review item; other main
 captions use 17–35 DIP. This supplemental view does not change the original
 44-view regression counts or establish full chapter acceptance. Results are in
 `.cache/replay/senmanga-acceptance/processing-28-current/`.
+
+### Captions at a cropped panel boundary — 2026-09-28
+
+View 26 reproduced a real overflow: 522 changed pixels, including 408 new dark
+pixels, extended into the gutter below a bubble ending at row 521. Closed-bubble
+qualification failed, and the fallback accepted the gutter as plain paper.
+The new public-renderer regression first failed with 606 changed gutter pixels.
+
+The bounded repair requires independently qualified plain lettering, two dark
+contours ending together beyond the source text, eight rows of matching paper,
+and an opposing straight panel rule. An inferred boundary closes the existing
+flood for qualification only; no boundary line is painted. Existing source-cover,
+artwork, word-break and font-floor checks remain in use. This does not recover
+arbitrary open or textured bubbles.
+
+The synthetic regression and all 14 standard cases pass. In the original view,
+the complete caption now uses four local lines at 17 DIP, replacing five lines
+at 19 DIP that overflowed. The gutter remains pixel-identical to the source.
+The historical rectangle assertion still fails: its left edge is 932, while the
+qualified interior begins at 930. Its annotation remains unchanged; this is not
+a claim that the original strict fixture passes.
+
+The 44-view comparison retains all 409 captions, with no new margin captions or
+failure signatures. Forty-three rendered views are pixel-identical; only view
+26 changes. Its top/right panel rules and dark left stroke remain unchanged;
+11 pale left-edge pixels (243–254) become white during paper normalization.
+The 16 historical strict failures remain recorded. This comparison measures
+rendering of fixed supplied regions, not detection or recognition completeness.
+
+ABBA timing used two fresh-process samples per variant and nine repeated renders
+per sample. Before → after first-layout samples (ms): view 26, 941.69/906.36 →
+960.18/1037.83; Comic Days, 2063.61/2110.78 → 2142.21/2097.37; Tameshiyo,
+2558.04/2470.40 → 2272.17/2303.85. The observed view-26 increase averages 75 ms.
+Repeated-view medians remain 1.85–3.67 ms for the candidate (baseline 1.88–4.03
+ms); candidate worst repeats are at most 7.39 ms. Fresh layout includes JIT and
+environment variation, so these small samples establish neither a general
+speedup nor a precise slowdown. Capture, OCR, translation and live compositor
+motion are outside the timer. Logs and immutable binary hashes are retained in
+`.cache/replay/panel-cropped-timing/`.
+
+Separate audits found no safe larger-font repair for saved view 28 and no safe
+word-preserving local placement for saved view 37. Those 1524×810 tool images
+are smaller than the current 2286×1215 application captures; their metadata is
+not proof of the same live DPI or minimum-font outcome. View 20's rectangle
+failure has no changed pixels outside its annotated container. Private evidence
+is under `.cache/replay/panel-cropped-*`, `coverage-audit`, `view28-fit-audit`,
+and `view37-fit-audit`. Fresh live validation remains pending because automatic
+approval review blocks screenshots of the capture-excluded controls; no live
+smoothness or full-chapter acceptance follows from these saved-view checks.

@@ -179,6 +179,41 @@ internal static class Program
                         Require(curvedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(curvedRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Complete local lines in an open curved bubble must preserve its border and exterior artwork.");
+
+                // A panel crop ends both flanks together; its white gutter is not extra speech space.
+                var croppedBubble = fixture with { Id = "panel-cropped-open-bottom-bubble", Background = "panel-cropped-bubble",
+                    Regions = new[] { fixture.Regions[0] with { Bounds = new Box(265, 134, 88, 127),
+                        RecognizedText = "今更だけど謝っておきたかったんだ",
+                        Translation = "ถึงตอนนี้ก็สายไปแล้ว แต่ฉันอยากจะขอโทษจริงๆ" } },
+                    TextContainers = new[] { new ContainerFixture("short", new Box(228, 107, 147, 174), true) },
+                    ProtectedArtwork = Array.Empty<ProtectedFixture>() };
+                var croppedPixels = Pixels(BuildFrame(croppedBubble));
+                Paint(croppedPixels, fixture.Width, fixture.Height,
+                    new Drawing.Rectangle(0, 0, fixture.Width, fixture.Height), (x, y) => {
+                        if (x < 120 || x >= 375 || y < 107 || y >= 281)
+                            return ((byte)255, (byte)255, (byte)255);
+                        int left = 228 + (int)Math.Round(21 * Math.Pow((y - 197d) / 90, 2));
+                        if (y < 109 || x >= 373 || x >= left && x < left + 2)
+                            return ((byte)18, (byte)18, (byte)18);
+                        if (x < left) return ((byte)180, (byte)180, (byte)180);
+                        byte paperOrInk = croppedPixels[(y * fixture.Width + x) * 4] < 128 ? (byte)18 : (byte)255;
+                        return (paperOrInk, paperOrInk, paperOrInk);
+                    });
+                var croppedFrame = BitmapSource.Create(fixture.Width, fixture.Height, fixture.Dpi, fixture.Dpi,
+                    PixelFormats.Bgra32, null, croppedPixels, fixture.Width * 4);
+                croppedFrame.Freeze();
+                var croppedResult = Replay(croppedBubble, croppedFrame);
+                if (diagnostics is not null) WriteDiagnostics(diagnostics,
+                    croppedBubble, croppedFrame, croppedResult, "fixed-text");
+                var croppedRendered = Pixels(croppedResult.Rendered);
+                for (int y = 107; y < fixture.Height; y++)
+                for (int x = 0; x < fixture.Width; x++)
+                    if (y >= 281 || !croppedBubble.Regions[0].Bounds.Drawing.Contains(x, y)
+                        && croppedPixels[(y * fixture.Width + x) * 4] != 255)
+                        Require(croppedPixels.AsSpan((y * fixture.Width + x) * 4, 4)
+                            .SequenceEqual(croppedRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
+                            "A panel-cropped bubble must preserve every gutter, outline and exterior artwork pixel.");
+                Verify(croppedBubble, croppedResult);
             }
             if (fixture.Background == "bubble")
             {

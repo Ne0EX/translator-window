@@ -1241,7 +1241,7 @@ public sealed class SubtitleOverlay : Window
                     localSource, localMask, cancellationToken);
             }
             var plan = display?.Cover ?? SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
-                localSource, search, footprint is not null, workBudget.TryBubble, cancellationToken);
+                localSource, search, footprint, workBudget.TryBubble, cancellationToken);
             if (display is null && plan is not null && footprint is not null)
                 plan = plan.IncludeFootprint(footprint, localSource, workBudget.SampleBackgroundRow, cancellationToken);
             if (plan is not null)
