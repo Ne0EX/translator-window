@@ -1845,3 +1845,11 @@ whole crop reproduces the loss. This is diagnostic evidence, not an implemented
 OCR fix. Its source hashes, model hashes and control outputs remain private in
 `.cache/live-qa/native3a46-recognition-audit/`. Live reading acceptance and the
 full chapter remain open.
+
+Review of the newly local symbol caption confirms its neighboring blue
+speedlines and dark outline remain intact. The recovered shared left cover
+also whitens 38 pale yellow-fringe pixels just below the symbol detection
+([1376..1388,1474..1480]); the old region-7-first control already did so without
+the symbol cover. This existing contour-quality limit remains open, along with
+incomplete recognition of the expressive symbols. Passing cover probes does
+not establish complete native artwork preservation.
