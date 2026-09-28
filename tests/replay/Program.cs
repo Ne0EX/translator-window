@@ -74,7 +74,8 @@ internal static class Program
                 $"{fixture.Id}: progressive region must identify an existing text region.");
             var first = Replay(fixture, frame, performance);
             // Compare fresh all-ready placement with completion through the same live renderer instance.
-            var second = Replay(fixture, frame, pendingRegionIndex: pendingRegion);
+            var second = Replay(fixture, frame, performance: performance && pendingRegion is not null,
+                pendingRegionIndex: pendingRegion);
             if (diagnostics is not null && pendingRegion is not null)
                 WriteDiagnostics(diagnostics, fixture with { Id = fixture.Id + "-progressive" }, frame, second, "fixed-text");
             Require(JsonSerializer.Serialize(first.Items.OrderBy(item => item.Kind).ThenBy(item => item.RegionId))
@@ -472,6 +473,59 @@ internal static class Program
                         Require(neighborPixels.AsSpan((y * fixture.Width + x) * 4, 4)
                             .SequenceEqual(neighborRendered.AsSpan((y * fixture.Width + x) * 4, 4)),
                             "Fitting beside pending text must preserve that entire region and the bubble outline and exterior.");
+                var headingBase = fixture with { Width = 1000 };
+                var headingPixels = Pixels(BuildFrame(headingBase));
+                // Like the live reader, retain a gray gutter for the conservative pending-state fallback.
+                Paint(headingPixels, headingBase.Width, headingBase.Height, new Drawing.Rectangle(600, 0, 400, headingBase.Height),
+                    (_, _) => ((byte)120, (byte)120, (byte)120));
+                Paint(headingPixels, headingBase.Width, headingBase.Height, new Drawing.Rectangle(291, 272, 4, 12),
+                    (_, _) => ((byte)248, (byte)248, (byte)248));
+                Paint(headingPixels, headingBase.Width, headingBase.Height, new Drawing.Rectangle(292, 272, 3, 3),
+                    (_, _) => ((byte)18, (byte)18, (byte)18));
+                // The real band is below the closed balloon; only its detection's empty top overlaps punctuation.
+                Paint(headingPixels, headingBase.Width, headingBase.Height, new Drawing.Rectangle(200, 305, 240, 37),
+                    (_, _) => ((byte)250, (byte)40, (byte)85));
+                for (int x = 204; x < 437; x += 8)
+                    Paint(headingPixels, headingBase.Width, headingBase.Height, new Drawing.Rectangle(x, 308, 3, 28),
+                        (_, _) => ((byte)255, (byte)235, (byte)50));
+                var headingArtwork = new Drawing.Rectangle(418, 270, 6, 5);
+                Paint(headingPixels, headingBase.Width, headingBase.Height, headingArtwork,
+                    (_, _) => ((byte)30, (byte)90, (byte)150));
+                var headingFrame = BitmapSource.Create(headingBase.Width, headingBase.Height, headingBase.Dpi, headingBase.Dpi,
+                    PixelFormats.Bgra32, null, headingPixels, headingBase.Width * 4);
+                headingFrame.Freeze();
+                var headingFixture = headingBase with { Id = "bubble-beside-ready-heading", Background = "bubble-heading",
+                    AutoStyle = true, ProgressiveRegion = "headline",
+                    Regions = new[] { fixture.Regions[0] with { Bounds = new Box(260, 155, 72, 120) },
+                        new RegionFixture("headline", new Box(200, 272, 240, 80), "見出し", "อ่าน") },
+                    WhiteSourceCoverPoints = new[] { new Box(293, 273, 1, 1) } };
+                var headingResult = Replay(headingFixture, headingFrame);
+                Verify(headingFixture, headingResult);
+                var unqualifiedHeading = Replay(headingFixture with { AutoStyle = false, WhiteSourceCoverPoints = null }, headingFrame);
+                int protectedSourceInk = (125 * headingBase.Width + 292) * 4;
+                Require(headingPixels.AsSpan(protectedSourceInk, 4)
+                    .SequenceEqual(Pixels(unqualifiedHeading.Rendered).AsSpan(protectedSourceInk, 4)),
+                    "An unqualified overlapping passage must not unlock an expanded bubble cover.");
+                // Replay checks every pending raw-source pixel before completing on the same overlay instance.
+                var headingProgressive = Replay(headingFixture, headingFrame, pendingRegionIndex: 1);
+                Verify(headingFixture, headingProgressive);
+                Require(headingResult.RenderHash == headingProgressive.RenderHash
+                    && JsonSerializer.Serialize(headingResult.Items.OrderBy(item => item.Kind).ThenBy(item => item.RegionId))
+                        == JsonSerializer.Serialize(headingProgressive.Items.OrderBy(item => item.Kind).ThenBy(item => item.RegionId)),
+                    "A newly ready heading must reveal the complete bubble cover and match a fresh complete caption layer.");
+                var headingRendered = Pixels(headingResult.Rendered);
+                foreach (var preserved in new[] { headingArtwork, new Drawing.Rectangle(291, 105, 6, 3) })
+                for (int y = preserved.Top; y < preserved.Bottom; y++)
+                for (int x = preserved.Left; x < preserved.Right; x++)
+                    Require(headingPixels.AsSpan((y * headingBase.Width + x) * 4, 4)
+                        .SequenceEqual(headingRendered.AsSpan((y * headingBase.Width + x) * 4, 4)),
+                        $"Precise heading ownership must preserve unrelated artwork and the separate bubble outline at {x},{y}.");
+                if (diagnostics is not null)
+                {
+                    WriteDiagnostics(diagnostics, headingFixture, headingFrame, headingResult, "fixed-text");
+                    WriteDiagnostics(diagnostics, headingFixture with { Id = headingFixture.Id + "-progressive" },
+                        headingFrame, headingProgressive, "fixed-text");
+                }
                 var roundedDetection = fixture with { Regions = new[] {
                     fixture.Regions[0] with { Bounds = new Box(235, 145, 120, 120) } } };
                 Verify(roundedDetection, Replay(roundedDetection, frame));
@@ -1180,8 +1234,9 @@ internal static class Program
                 && fixture.TargetLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase);
             var captionStyle = fixture.AutoStyle || fixture.Background == "colored-ink"
                 ? CaptionStyles.ResolveInstalled(new CaptionStyleOptions(CaptionRole.Auto)) : null;
-            if (pendingRegionIndex is int pendingIndex)
+            void VerifyPendingSource()
             {
+                if (pendingRegionIndex is not int pendingIndex) return;
                 var partialTranslations = fixture.Regions.Select((region, index) =>
                     index == pendingIndex ? "" : region.Translation).ToArray();
                 overlay.Render(capture, regions, partialTranslations, SubtitleStyle.Overwrite, 6, frame,
@@ -1206,6 +1261,7 @@ internal static class Program
                         $"{fixture.Id}: another caption must preserve every pending source pixel.");
                 }
             }
+            VerifyPendingSource();
             var firstRender = Stopwatch.StartNew();
             try
             {
@@ -1223,7 +1279,7 @@ internal static class Program
             firstRender.Stop();
             if (performance)
             {
-                Console.WriteLine($"TIMING {fixture.Id}: first layout={firstRender.Elapsed.TotalMilliseconds:F2} ms.");
+                Console.WriteLine($"TIMING {fixture.Id}: {(pendingRegionIndex is null ? "first layout" : "progressive completion")}={firstRender.Elapsed.TotalMilliseconds:F2} ms.");
                 var translations = fixture.Regions.Select(region => region.Translation).ToArray();
                 var elapsed = new double[9];
                 for (int iteration = 0; iteration < elapsed.Length; iteration++)
@@ -1295,11 +1351,13 @@ internal static class Program
                 var repeatedVisuals = canvas.Children.OfType<Border>().ToArray();
                 var repeatedItems = repeatedVisuals.Select(border => SceneItem.From(border, fixture, capture,
                     desktop, transform)).ToArray();
-                Require(JsonSerializer.Serialize(items) == JsonSerializer.Serialize(repeatedItems),
+                Require(JsonSerializer.Serialize(items.OrderBy(item => item.Kind).ThenBy(item => item.RegionId))
+                    == JsonSerializer.Serialize(repeatedItems.OrderBy(item => item.Kind).ThenBy(item => item.RegionId)),
                     $"{fixture.Id}: repeated completed captions changed geometry, text or style.");
                 Require(Pixels(rendered).AsSpan().SequenceEqual(Pixels(RenderCapturedView(frame,
                     repeatedVisuals, repeatedItems, fixture.Width, fixture.Height))),
                     $"{fixture.Id}: repeated completed captions changed rendered pixels.");
+                VerifyPendingSource();
             }
             if (fixture.Background == "bubble" && !allowMissing)
             {

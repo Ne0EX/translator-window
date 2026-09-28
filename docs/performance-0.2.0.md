@@ -1719,3 +1719,80 @@ at 883/907/897 ms versus baseline 932/892/1,108 ms; repeated-layout medians are
 regression for this view, not a general speedup. GPU/model allocation is unchanged.
 The live navigation variation above, missed source passages and whole-chapter
 acceptance remain open.
+
+### Bubble covers beside overlapping heading detections — 2026-09-28
+
+The native after-scroll capture from NOTE-047 reproduces the right passage's
+18-DIP margin fallback through the public renderer. Reducing its twelve regions
+to the right bubble and bottom heading preserves the failure; removing the
+heading restores a local 36-DIP caption. Disabling automatic styling does not
+fix it. Moving only the heading detection below the bubble detection does.
+Their detected rectangles overlap by 107 × 11 pixels. The shared strip contains
+39 dark pixels from the bubble's exclamation mark, not heading lettering.
+
+The shared cover routine rejected the whole bubble on that small overlap.
+Subtracting the complete neighboring rectangle restored local placement but
+left those punctuation pixels visible. It now protects a pending or unqualified
+passage's full rectangle, and a ready qualified heading's actual cover mask.
+Raw overlap with an unqualified passage still rejects the local cover. The
+target can therefore use a temporary margin until its neighboring heading is
+ready, then move into the bubble. This conservative transition remains a limit.
+Footprint fallback uses the same protection. Qualified masks remain immutable
+during cover creation so region order cannot change ownership. Changes between
+pending and ready invalidate dependent cover and caption caches in both
+directions; the rendering work limits remain unchanged. Source-only plans are
+retained for the same frozen frame, affected captions are re-fitted, and margin
+cards are repacked. Unaffected captions remain cached if they do not collide
+with placed captions. Ordinary updates retain the previous invalidation policy.
+
+The committed synthetic public-renderer case went RED on uncovered punctuation,
+then separately on ready-to-pending source preservation. Both now pass, alongside
+complete local text, pending source protection, unrelated artwork and upper
+outline controls, and exact fresh/progressive/repeated pixels. An initial
+synthetic outline annotation included pale interior paper; its protected sample
+was corrected to the actual three outline rows. Scene records are compared by
+kind and region: cached margin visuals can change enumeration order without
+changing any record or output pixel. The exact pixel comparison remains strict.
+
+The unchanged twelve-region native replay now puts the right caption locally
+at 33 DIP. All 39 annotated source-punctuation pixels become white and two
+independent outline points remain unchanged. The bottom heading remains local
+at 42 DIP. Fresh and progressive render hashes match `AEBD01732A65` (prefix).
+Private source, regressions, reduction, pixel annotations and binary hashes are
+under `.cache/live-qa/native3a46-scroll-audit/`.
+
+The first corpus trial exposed a real artwork regression in view 40: relaxing
+all raw overlaps admitted a cover that erased speed lines outside its detection.
+The final policy restores the old guard for its unqualified overlapping region,
+rather than adding an overlap-size threshold. The speculative generic overlap
+test was removed; the ready-heading regression remains. Its synthetic reader
+has an explicit gray gutter so the pending state can use the same conservative
+margin fallback as the native capture.
+
+All 14 standard renderer cases and the color-cover/style checks pass. The
+44-view comparison retains all 420 caption records, no new margins and the same
+16 strict failures. Forty-two images are identical, including view 40. The two
+remaining images match the reviewed trial output: view 45 whitens 570 paper
+and glyph-fringe pixels inside its title detection; view 46 whitens 273 pale
+paper pixels. No caption records change. The final cache reset also clears the
+previous display vector before cancellable work on new inputs; the standard
+changed-frame checks and exact native progressive replay pass after that guard.
+
+The first correct cache invalidation re-fitted every caption, costing 545/556 ms
+when the heading completed, versus 25/25 ms for the old incorrect renderer.
+Profiling identified unnecessary caption layout, not model inference. Reusing
+source-only plans and preserving unrelated caption layout reduces final samples
+to 183/193 ms, with exact fresh/progressive pixels and no stale margin gap.
+This is still about 0.16–0.17 seconds of extra work at heading completion; it is
+an explicit tradeoff for restoring the bubble. First layouts are 1,434/1,439 ms;
+repeated-view medians are 8.88–9.93 ms. These renderer measurements exclude
+capture, OCR, translation and compositor presentation. No live smoothness or
+hardware-independent speed claim is made. No new model or VRAM allocation is
+introduced; the frame cache retains source cover plans until invalidated.
+
+This repairs caption placement and source coverage, not recognition. The native
+right region still omits the visible lower clause from recognized text, and the
+shaded left caption still falls to 18 DIP in this capture. CPU crop inspection
+confirms the lower text is retained in the recognition crop; the existing joined
+bubble splitter rejects this view's wider neck. Fresh model execution is needed
+to establish that cause. Full-chapter and fresh live acceptance remain open.

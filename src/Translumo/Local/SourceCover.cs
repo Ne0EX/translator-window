@@ -109,13 +109,13 @@ public sealed class SourceCoverPlan
         }
     }
 
-    internal SourceCoverPlan? Excluding(IReadOnlyList<Rectangle> areas, Action<int> sampleRow,
+    internal SourceCoverPlan? Excluding(IReadOnlyList<(Rectangle Area, SourceCoverPlan? Cover)> areas, Action<int> sampleRow,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var clipped = (bool[])mask.Clone();
         int covered = CoveredPixelCount;
-        foreach (var area in areas)
+        foreach (var (area, cover) in areas)
         {
             var overlap = Rectangle.Intersect(area, PermittedArea);
             for (int y = overlap.Top; y < overlap.Bottom; y++)
@@ -125,7 +125,7 @@ public sealed class SourceCoverPlan
                 for (int x = overlap.Left; x < overlap.Right; x++)
                 {
                     int offset = (y - PermittedArea.Top) * PermittedArea.Width + x - PermittedArea.Left;
-                    if (!clipped[offset]) continue;
+                    if (!clipped[offset] || cover is not null && !cover.Covers(x, y)) continue;
                     clipped[offset] = false;
                     covered--;
                 }

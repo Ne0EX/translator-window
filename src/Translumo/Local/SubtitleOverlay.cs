@@ -67,12 +67,14 @@ public sealed class SubtitleOverlay : Window
     private readonly Dictionary<Drawing.Rectangle, Brush> maskCache = new();
     private readonly Dictionary<(Drawing.Rectangle Source, Drawing.Rectangle Mask),
         (Brush Patch, Drawing.Rectangle Bounds, Brush Caption, Color Background, SourceCoverPlan? Plan)?> sourceCoverCache = new();
+    private readonly Dictionary<(Drawing.Rectangle Source, Drawing.Rectangle Mask), SourceCoverPlan?> sourcePlanCache = new();
     private readonly Dictionary<Drawing.Rectangle, DisplayLettering?> displayCache = new();
     private Drawing.Rectangle plainMarginCapture;
     private Drawing.Rectangle[]? plainMarginMasks;
     private Drawing.Rectangle[]? plainMargins;
     private BitmapSource? captionFrame;
     private Drawing.Rectangle[]? captionSources;
+    private DisplayLettering?[]? captionDisplays;
     private int captionPadding;
     private (Drawing.Rectangle Capture, SubtitleStyle Style, bool JapaneseToThai,
         double ScaleX, double ScaleY, CaptionStyleProfile CaptionStyle) captionOptions;
@@ -137,9 +139,11 @@ public sealed class SubtitleOverlay : Window
         layoutPixels = null;
         captionFrame = null;
         captionSources = null;
+        captionDisplays = null;
         wrappedCache.Clear();
         maskCache.Clear();
         sourceCoverCache.Clear();
+        sourcePlanCache.Clear();
         plainMarginMasks = plainMargins = null;
         captionCache.Clear();
         Hide();
@@ -330,8 +334,10 @@ public sealed class SubtitleOverlay : Window
         if (!sameCaptionInputs)
         {
             captionCache.Clear();
+            captionDisplays = null;
             wrappedCache.Clear();
             sourceCoverCache.Clear();
+            sourcePlanCache.Clear();
             displayCache.Clear();
         }
         captionFrame = cacheCaptions ? frame : null;
@@ -387,6 +393,31 @@ public sealed class SubtitleOverlay : Window
             }
         }
 
+        bool displayProtectionChanged = sameCaptionFrame && (captionDisplays is null || !captionDisplays.SequenceEqual(displayStyles));
+        if (displayProtectionChanged)
+        {
+            // Pending passages protect their rectangles; ready headings protect their qualified lettering masks.
+            var changedAreas = new List<Drawing.Rectangle>();
+            for (int i = 0; i < sources.Length; i++)
+            {
+                if (captionDisplays is not null && ReferenceEquals(captionDisplays[i]?.Cover, displayStyles[i]?.Cover)) continue;
+                var changed = sources[i];
+                changed.Offset(-captureBounds.X, -captureBounds.Y);
+                if (captionDisplays?[i]?.Cover is { } previous) changed = Drawing.Rectangle.Union(changed, previous.FootprintBounds);
+                if (displayStyles[i]?.Cover is { } current) changed = Drawing.Rectangle.Union(changed, current.FootprintBounds);
+                changedAreas.Add(changed);
+            }
+            for (int i = 0; i < sources.Length; i++)
+            {
+                sourcePlanCache.TryGetValue((sources[i], masks[i]), out var plan);
+                var local = masks[i]; local.Offset(-captureBounds.X, -captureBounds.Y);
+                var area = plan?.FootprintBounds ?? displayStyles[i]?.Cover.FootprintBounds ?? local;
+                if (changedAreas.Any(area.IntersectsWith)) captionCache.Remove(i);
+            }
+            sourceCoverCache.Clear();
+        }
+        captionDisplays = cacheCaptions ? displayStyles : null;
+
         if (style == SubtitleStyle.Overwrite)
             for (int i = 0; i < masks.Length; i++)
             {
@@ -395,9 +426,7 @@ public sealed class SubtitleOverlay : Window
                     && !string.IsNullOrWhiteSpace(translations[i]))
                 {
                     sourceCovers[i] = SourceCoverForFrame(sources[i], masks[i], captureBounds, backgroundPixels, frame,
-                        sources, workBudget, cancellationToken, displayStyles[i]);
-                    if (displayStyles[i] is { } candidate && sourceCovers[i]?.Plan != candidate.Cover)
-                        displayStyles[i] = null;
+                        sources, displayStyles, workBudget, cancellationToken, displayStyles[i]);
                     if (sourceCovers[i] is { } sourceCover)
                         visuals.Add((new Border { Background = sourceCover.Patch, Tag = i }, sourceCover.Bounds));
                 }
@@ -464,12 +493,13 @@ public sealed class SubtitleOverlay : Window
                     ? SourceInk(source, captureBounds, backgroundPixels, qualified.Background) : null);
             string translation = japaneseToThai && style == SubtitleStyle.Overwrite
                 ? SafeThaiTranslation(translations[i]) : translations[i];
-            if (displayStyles[i] is { } display)
+            if (displayStyles[i] is { } display && ReferenceEquals(sourceCovers[i]?.Plan, display.Cover))
             {
                 if (sameCaptionInputs && captionCache.TryGetValue(i, out var headingCache)
                     && headingCache.Translation == translation && headingCache.SourceText == regions[i].Text
                     && headingCache.Source == source && headingCache.Caption?.Child is TextBlock cachedHeading
-                    && ReferenceEquals(cachedHeading.Tag, display.Cover))
+                    && ReferenceEquals(cachedHeading.Tag, display.Cover)
+                    && !placed.Any(other => other.IntersectsWith(headingCache.Bounds)))
                 {
                     placed.Add(headingCache.Bounds); visuals.Add((headingCache.Caption, headingCache.Bounds));
                     continue;
@@ -501,9 +531,10 @@ public sealed class SubtitleOverlay : Window
             if (cacheCaptions && captionCache.TryGetValue(i, out var previous)
                 && previous.Translation == translation && previous.SourceText == regions[i].Text
                 && previous.Source == source
+                && (previous.Caption is null || !placed.Any(other => other.IntersectsWith(previous.Bounds)))
                 && neighborCovers.SequenceEqual(previous.NeighborCovers ?? Array.Empty<SourceCoverPlan>()))
             {
-                if (sameCaptionFrame && previous.Caption is null)
+                if (sameCaptionFrame && (previous.Caption is null || displayProtectionChanged && previous.Badge is not null))
                 {
                     marginIndices.Add(i);
                     continue;
@@ -549,8 +580,11 @@ public sealed class SubtitleOverlay : Window
                 }
             }
             if (cacheCaptions)
-                foreach (int stale in captionCache.Keys.Where(index => index >= i).ToArray())
+            {
+                if (displayProtectionChanged) captionCache.Remove(i);
+                else foreach (int stale in captionCache.Keys.Where(index => index >= i).ToArray())
                     captionCache.Remove(stale);
+            }
             var blockers = sources.Where((candidate, index) => index != i
                     && candidate.Width > 0 && candidate.Height > 0)
                 .Concat(placed).ToArray();
@@ -1214,7 +1248,8 @@ public sealed class SubtitleOverlay : Window
     private (Brush Patch, Drawing.Rectangle Bounds, Brush Caption, Color Background, SourceCoverPlan? Plan)? SourceCoverForFrame(
         Drawing.Rectangle source, Drawing.Rectangle mask, Drawing.Rectangle capture,
         byte[]? pixels, BitmapSource? frame, Drawing.Rectangle[] sources,
-        RenderWorkBudget workBudget, CancellationToken cancellationToken, DisplayLettering? display = null)
+        DisplayLettering?[] displayStyles, RenderWorkBudget workBudget, CancellationToken cancellationToken,
+        DisplayLettering? display = null)
     {
         var key = (source, mask);
         if (frame?.IsFrozen == true)
@@ -1239,49 +1274,57 @@ public sealed class SubtitleOverlay : Window
             var localMask = mask;
             localSource.Offset(-capture.X, -capture.Y);
             localMask.Offset(-capture.X, -capture.Y);
-            int searchX = Math.Max(96, Math.Max(localSource.Width, localSource.Height));
-            int searchY = Math.Max(96, localSource.Height);
-            Drawing.Rectangle search;
-            do
+            var plan = display?.Cover;
+            if (display is null && !(frame?.IsFrozen == true && sourcePlanCache.TryGetValue(key, out plan)))
             {
-                search = localSource;
-                search.Inflate(searchX, searchY);
-                search.Intersect(new Drawing.Rectangle(0, 0, capture.Width, capture.Height));
-                if (SourceCover.IsWithinBudget(search) || searchX == 0 && searchY == 0) break;
-                // Keep the detected text intact while reducing oversized search padding, not the flood budget.
-                searchX /= 2;
-                searchY /= 2;
-            } while (true);
-            SourceCoverPlan? footprint = null;
-            if (display is null)
-            {
+                int searchX = Math.Max(96, Math.Max(localSource.Width, localSource.Height));
+                int searchY = Math.Max(96, localSource.Height);
+                Drawing.Rectangle search;
+                do
+                {
+                    search = localSource;
+                    search.Inflate(searchX, searchY);
+                    search.Intersect(new Drawing.Rectangle(0, 0, capture.Width, capture.Height));
+                    if (SourceCover.IsWithinBudget(search) || searchX == 0 && searchY == 0) break;
+                    // Keep the detected text intact while reducing oversized search padding, not the flood budget.
+                    searchX /= 2;
+                    searchY /= 2;
+                } while (true);
                 workBudget.SampleBackgroundRow(checked(localMask.Width * localMask.Height));
-                footprint = SourceCover.TryCreate(pixels, capture.Width, capture.Height, capture.Width * 4,
+                var footprint = SourceCover.TryCreate(pixels, capture.Width, capture.Height, capture.Width * 4,
                     localSource, localMask, cancellationToken);
+                plan = SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
+                    localSource, search, footprint, workBudget.TryBubble, cancellationToken);
+                if (plan is not null && footprint is not null)
+                    plan = plan.IncludeFootprint(footprint, localSource, workBudget.SampleBackgroundRow, cancellationToken);
+                plan ??= footprint;
+                // Neighbor readiness changes clipping, not the source pixels or their qualified bubble contour.
+                if (frame?.IsFrozen == true) sourcePlanCache[key] = plan;
             }
-            var plan = display?.Cover ?? SourceCover.TryCreateBubble(pixels, capture.Width, capture.Height,
-                localSource, search, footprint, workBudget.TryBubble, cancellationToken);
-            if (display is null && plan is not null && footprint is not null)
-                plan = plan.IncludeFootprint(footprint, localSource, workBudget.SampleBackgroundRow, cancellationToken);
             if (plan is not null)
             {
                 var bubble = plan.FootprintBounds;
-                bubble.Offset(capture.Location);
-                List<Drawing.Rectangle>? exclusions = null;
-                foreach (var other in sources)
+                List<(Drawing.Rectangle Area, SourceCoverPlan? Cover)>? exclusions = null;
+                for (int i = 0; i < sources.Length; i++)
                 {
-                    if (other == source || !Conflicts(other)) continue;
+                    if (sources[i] == source) continue;
+                    var otherCover = displayStyles[i]?.Cover;
+                    var other = sources[i];
+                    other.Offset(-capture.X, -capture.Y);
+                    if (otherCover is not null) other = otherCover.FootprintBounds;
+                    if (!Conflicts(other, otherCover)) continue;
                     if (display is not null) return null;
-                    if (other.IntersectsWith(source)) { plan = null; break; }
+                    if (otherCover is null && other.IntersectsWith(localSource)) return null;
                     // Keep the closed bubble, but leave neighboring passages untouched until their own cover is ready.
-                    var excluded = other;
-                    excluded.Offset(-capture.X, -capture.Y);
-                    (exclusions ??= new()).Add(excluded);
+                    (exclusions ??= new()).Add((other, otherCover));
                 }
-                if (plan is not null && exclusions is not null)
+                if (exclusions is not null)
+                {
                     plan = plan.Excluding(exclusions, workBudget.SampleBackgroundRow, cancellationToken);
+                    if (plan is null) return null;
+                }
 
-                bool Conflicts(Drawing.Rectangle other)
+                bool Conflicts(Drawing.Rectangle other, SourceCoverPlan? otherCover)
                 {
                     var overlap = Drawing.Rectangle.Intersect(bubble, other);
                     if (overlap.IsEmpty) return false;
@@ -1291,12 +1334,11 @@ public sealed class SubtitleOverlay : Window
                         cancellationToken.ThrowIfCancellationRequested();
                         workBudget.SampleBackgroundRow(overlap.Width);
                         for (int x = overlap.Left; x < overlap.Right; x++)
-                            if (plan.Covers(x - capture.X, y - capture.Y)) return true;
+                            if (plan.Covers(x, y) && (otherCover is null || otherCover.Covers(x, y))) return true;
                     }
                     return false;
                 }
             }
-            plan ??= footprint;
             if (plan is null)
             {
                 if (!CanUseLegacyMonochromeCover(source, mask, capture, pixels, cancellationToken)) return null;
@@ -1547,6 +1589,7 @@ public sealed class SubtitleOverlay : Window
         maskCapture = capture;
         maskCache.Clear();
         sourceCoverCache.Clear();
+        sourcePlanCache.Clear();
     }
 
     private static bool CanUseLegacyMonochromeCover(Drawing.Rectangle source, Drawing.Rectangle mask,

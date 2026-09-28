@@ -18,6 +18,13 @@ fill inside an enclosed bubble (including pale lettering outside its detection),
 unchanged bubble outlines and exterior pixels, preservation of a second passage
 awaiting translation, light captions on dark fills, and dominant source-ink color
 when the Auto preset is selected. These checks use the public renderer only.
+An overlapping, ready qualified heading must not discard the neighboring bubble.
+While the heading is pending, its entire detected rectangle stays unchanged;
+the synthetic reader includes a gray gutter for that conservative fallback.
+Once ready, its qualified lettering mask protects the heading while allowing
+the bubble's punctuation in the shared rectangle to be covered. The case checks
+complete local text, independent artwork and outline pixels, fresh/progressive
+pixel equality, repeated output, and a return from ready to pending.
 A narrow question bubble must keep the Thai particle `เหรอ` on one line while
 retaining its complete caption, local placement and font size of at least 20 DIP.
 This regression protects a demonstrated dictionary boundary error; it does not
@@ -137,6 +144,8 @@ machine target, not a hardware-independent CI requirement. Existing assertions
 compare the final geometry, full caption text and pixels with a fresh render.
 Capture, OCR, translation and compositor presentation are outside this timer;
 passing does not establish smooth live scrolling in Comet.
+For a fixture with `progressiveRegion`, `--performance` also times completion
+after that passage becomes ready, separately from fresh and repeated layout.
 
 ## Opt-in diagnostics
 
